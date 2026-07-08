@@ -6,18 +6,18 @@ Example: serve `https://myapp.example.com/assets/*` from `https://origin.example
 
 ## Requirements
 
-- macOS 14 or later.
+- macOS 14 or later, on an Apple Silicon Mac.
 - To build from source: Swift 6 toolchain (Xcode 16+ or the Swift toolchain).
 
 ## Install
 
-Grab `ProxyLight.app` (from a release zip or `scripts/build-app.sh`), move it to `/Applications`, and open it. ProxyLight has no dock icon — look for its icon in the menu bar at the top of the screen.
+1. Download `ProxyLight.zip` from the [latest release](https://github.com/stuartshields/ProxyLight/releases/latest).
+2. Unzip it and drag `ProxyLight.app` to `/Applications`.
+3. Double-click to open. The app is signed and notarized, so it opens without a security warning.
 
-To build the app bundle yourself:
+ProxyLight has no dock icon — after it launches, look for its icon in the menu bar at the top of the screen.
 
-```
-scripts/build-app.sh      # → dist/ProxyLight.app
-```
+Prefer to build it yourself? See [Development](#development).
 
 ## First steps
 
@@ -54,5 +54,6 @@ Toggle individual mappings on and off from the menu. Use **Import…** / **Expor
 - Build: `swift build`
 - Test: `swift test`
 - Run from source: `swift run ProxyLight`
+- Package the app bundle: `scripts/build-app.sh` → `dist/ProxyLight.app`
 
 See `CLAUDE.md` for architecture and packaging details.
