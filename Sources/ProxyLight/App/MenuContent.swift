@@ -17,7 +17,12 @@ struct MenuContent: View {
 				.onChange(of: mapping.enabled) { _, _ in state.save() }
 		}
 		Divider()
-		Button("Edit Mappings…") { openSettings() }
+		Button("Edit Mappings…") {
+			openSettings()
+			// Accessory apps (LSUIElement) don't become frontmost on their own,
+			// so the Settings window would otherwise open/stay behind other apps.
+			NSApp.activate(ignoringOtherApps: true)
+		}
 		Button("Quit") { NSApplication.shared.terminate(nil) }
 	}
 }

@@ -28,6 +28,24 @@ struct SettingsView: View {
 				}
 			}
 
+			Section {
+				Toggle("Start ProxyLight at login", isOn: Binding(
+					get: { state.launchAtLogin },
+					set: { state.setLaunchAtLogin($0) }
+				))
+				if !state.launchAtLoginStatus.isEmpty {
+					Text(state.launchAtLoginStatus)
+						.font(.caption)
+						.foregroundStyle(.secondary)
+				}
+			} header: {
+				Text("Startup")
+			} footer: {
+				Text("When on, ProxyLight launches at login and turns the proxy on automatically.")
+					.font(.caption)
+					.foregroundStyle(.secondary)
+			}
+
 			Section("Proxy") {
 				LabeledContent("Listen port") {
 					TextField("Port", value: $state.config.listenPort, format: .number.grouping(.never))
