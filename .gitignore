@@ -3,5 +3,3 @@
 *.xcodeproj
 DerivedData/
 .DS_Store
-dist/
-*.app
