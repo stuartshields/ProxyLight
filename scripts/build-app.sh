@@ -25,6 +25,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/$APP_NAME"
 cp packaging/Info.plist "$APP/Contents/Info.plist"
+cp packaging/ProxyLight.icns "$APP/Contents/Resources/ProxyLight.icns"
 # Legacy type/creator file some tooling still checks for.
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 

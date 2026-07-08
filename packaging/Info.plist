@@ -10,6 +10,8 @@
 	<string>com.humanmade.proxylight</string>
 	<key>CFBundleExecutable</key>
 	<string>ProxyLight</string>
+	<key>CFBundleIconFile</key>
+	<string>ProxyLight</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>CFBundleShortVersionString</key>
