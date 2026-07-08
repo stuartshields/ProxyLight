@@ -10,6 +10,8 @@ final class AppState: ObservableObject {
 	@Published var caAvailable: Bool
 	@Published var trustStatus: String = ""
 	@Published var transferStatus: String = ""
+	@Published var launchAtLogin = false
+	@Published var launchAtLoginStatus: String = ""
 
 	private let store: MappingStore
 	private let restoreStore: ProxyRestoreStore
@@ -22,6 +24,7 @@ final class AppState: ObservableObject {
 	// Live mapping set read by the proxy's engineProvider closure from NIO
 	// event-loop threads. Kept in sync with config.mappings on every save().
 	private let mappingsBox = MappingsBox([])
+	private let loginItemManager = LoginItemManager()
 
 	init() {
 		let dir = MappingStore.defaultDirectory
@@ -35,6 +38,12 @@ final class AppState: ObservableObject {
 
 		recoverFromUncleanExit()
 		installTerminationHandlers()
+		refreshLaunchAtLogin()
+		// Honor "start at login": if we're a registered login item, come up
+		// running so traffic is routed without the user clicking anything.
+		if case .enabled = loginItemManager.state {
+			start()
+		}
 	}
 
 	// A restore point left on disk means the previous session exited without
@@ -199,6 +208,30 @@ final class AppState: ObservableObject {
 			trustStatus = "Certificate trusted for your user account. Restart your browser to pick up the change."
 		} catch {
 			trustStatus = "Failed to trust certificate: \(error.localizedDescription)"
+		}
+	}
+
+	func setLaunchAtLogin(_ enabled: Bool) {
+		do {
+			try loginItemManager.setEnabled(enabled)
+			launchAtLoginStatus = ""
+		} catch {
+			launchAtLoginStatus = "Couldn't update the login item: \(error.localizedDescription)"
+		}
+		refreshLaunchAtLogin()
+	}
+
+	// The login-item service's status is the source of truth, so the toggle
+	// always reflects reality — including when macOS needs the user to approve it.
+	private func refreshLaunchAtLogin() {
+		switch loginItemManager.state {
+		case .enabled:
+			launchAtLogin = true
+		case .disabled:
+			launchAtLogin = false
+		case .requiresApproval:
+			launchAtLogin = true
+			launchAtLoginStatus = "Approve ProxyLight in System Settings › General › Login Items to finish enabling this."
 		}
 	}
 }
