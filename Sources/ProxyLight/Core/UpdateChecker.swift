@@ -18,8 +18,9 @@ struct UpdateChecker {
 	private static let latestReleaseURL = URL(string: "https://api.github.com/repos/stuartshields/ProxyLight/releases/latest")!
 	private static let maxResponseBytes = 1 << 20
 
-	// Bypasses proxy settings: while ProxyLight is running, the system proxy
-	// IS this app, and the update check must not depend on our own listener.
+	// Bypasses proxy settings as defense-in-depth: with PAC-selective routing,
+	// api.github.com is unmapped and would go DIRECT anyway, but bypassing
+	// keeps update checks independent of the proxy's state entirely.
 	static let session: URLSession = {
 		let config = URLSessionConfiguration.ephemeral
 		config.connectionProxyDictionary = [:]

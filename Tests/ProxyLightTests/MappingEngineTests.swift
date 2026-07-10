@@ -80,3 +80,19 @@ private func engine(_ ms: [(String, String, Bool)]) -> MappingEngine {
 		return
 	}
 }
+
+@Test func pacHostnamesListsEnabledFromHostsSortedAndDeduplicated() {
+	let engine = MappingEngine(mappings: [
+		Mapping(from: "https://Zeta.Example.com/a/*", to: "https://r.example.net/a/*"),
+		Mapping(from: "https://alpha.example.com/b/*", to: "https://r.example.net/b/*"),
+		Mapping(from: "http://alpha.example.com/c/*", to: "http://r.example.net/c/*"),
+	])
+	#expect(engine.pacHostnames == ["alpha.example.com", "zeta.example.com"])
+}
+
+@Test func pacHostnamesExcludesDisabledMappings() {
+	let engine = MappingEngine(mappings: [
+		Mapping(from: "https://off.example.com/a/*", to: "https://r.example.net/a/*", enabled: false),
+	])
+	#expect(engine.pacHostnames.isEmpty)
+}

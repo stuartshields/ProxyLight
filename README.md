@@ -26,7 +26,7 @@ Prefer to build it yourself? See [Development](#development).
 3. **Add a mapping.** Click **Add Mapping…**. Enter the address you visit under **From** and the real origin under **To**. A trailing `*` maps everything under a path prefix:
    - From: `https://myapp.example.com/assets/*`
    - To: `https://origin.example.net/assets/*`
-4. **Turn the proxy on.** Back in the menu, click **Turn Proxy On**. ProxyLight points your Mac's system proxy at itself automatically; turning it off restores your previous network settings.
+4. **Turn the proxy on.** Back in the menu, click **Turn Proxy On**. ProxyLight configures a PAC (Automatic Proxy Configuration) URL — `http://127.0.0.1:<port>/proxy.pac` — instead of a global proxy: only hosts with mappings route through ProxyLight, and everything else connects directly, with zero added latency and HTTP/3 intact. Turning it off restores your previous network settings.
 5. **Browse.** Requests that match a mapping are rewritten to the remote origin. The original address stays in the address bar.
 
 ## Why the certificate step matters
@@ -48,6 +48,7 @@ Toggle individual mappings on and off from the menu. Use **Import…** / **Expor
 - HTTP/1.1 only. WebSockets on mapped hosts are not supported.
 - The default listen port is `9876` (change it in Settings → Proxy).
 - The CA private key lives in `~/Library/Application Support/ProxyLight/`.
+- If ProxyLight quits or crashes, normal browsing is unaffected — macOS falls back to `DIRECT` once the PAC URL stops responding. Only mapped hosts stop resolving until the app restarts or you turn the proxy off to restore your previous settings.
 
 ## Development
 

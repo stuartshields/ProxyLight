@@ -31,8 +31,14 @@ final class ProxyServer {
 				// on `HTTPServerCodec` in ConnectHandler.swift.
 				channel.eventLoop.makeCompletedFuture(withResultOf: {
 					let codecHandlers = try HTTPServerCodec.install(on: channel)
+					// PACResponder answers self-addressed requests (the PAC
+					// fetch) and passes proxied traffic through. It joins the
+					// teardown list so a CONNECT reconfiguration removes it;
+					// installMITMPipeline deliberately does NOT re-add it.
+					let pacResponder = PACResponder(engineProvider: provider)
+					try channel.pipeline.syncOperations.addHandler(pacResponder)
 					try channel.pipeline.syncOperations.addHandler(
-						ConnectHandler(engineProvider: provider, ca: ca, httpServerCodecHandlers: codecHandlers)
+						ConnectHandler(engineProvider: provider, ca: ca, httpServerCodecHandlers: codecHandlers + [pacResponder])
 					)
 				})
 			}
