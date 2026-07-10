@@ -3,6 +3,7 @@ import SwiftUI
 struct MenuContent: View {
 	@ObservedObject var state: AppState
 	@Environment(\.openSettings) private var openSettings
+	@Environment(\.openWindow) private var openWindow
 
 	var body: some View {
 		Button(state.isRunning ? "Turn Proxy Off" : "Turn Proxy On") { state.toggle() }
@@ -18,9 +19,13 @@ struct MenuContent: View {
 		}
 		Divider()
 		Button("Edit Mappings…") {
-			openSettings()
+			openWindow(id: "mappings")
 			// Accessory apps (LSUIElement) don't become frontmost on their own,
-			// so the Settings window would otherwise open/stay behind other apps.
+			// so windows would otherwise open/stay behind other apps.
+			NSApp.activate(ignoringOtherApps: true)
+		}
+		Button("Settings…") {
+			openSettings()
 			NSApp.activate(ignoringOtherApps: true)
 		}
 		Button("Quit") { NSApplication.shared.terminate(nil) }
