@@ -135,18 +135,87 @@ private final class FakeRunner: CommandRunner {
 	#expect(decoded[0].mode == .rewrite)
 }
 
-@Test func mappingIOMergeIsNonDestructiveAndDedupes() {
-	let existing = [Mapping(from: "https://a.dev/x/*", to: "https://a.org/x/*", enabled: true, mode: .rewrite)]
-	let imported = [
-		Mapping(from: "https://a.dev/x/*", to: "https://a.org/x/*", enabled: true, mode: .rewrite), // duplicate content
-		Mapping(from: "https://c.dev/z/*", to: "https://c.org/z/*", enabled: true, mode: .fallbackOnNotFound), // new
+// MARK: Import classification & selective apply
+
+private func m(_ from: String, _ to: String, mode: MappingMode = .rewrite, enabled: Bool = true) -> Mapping {
+	Mapping(from: from, to: to, enabled: enabled, mode: mode)
+}
+
+@Test func classifyMarksExactContentMatchAsDuplicate() {
+	let existing = [m("https://a.dev/x/*", "https://a.org/x/*")]
+	#expect(MappingIO.classify(m("https://a.dev/x/*", "https://a.org/x/*"), against: existing) == .duplicate)
+}
+
+@Test func classifyIgnoresEnabledFlagForDuplicates() {
+	let existing = [m("https://a.dev/x/*", "https://a.org/x/*", enabled: false)]
+	#expect(MappingIO.classify(m("https://a.dev/x/*", "https://a.org/x/*"), against: existing) == .duplicate)
+}
+
+@Test func classifyMarksSharedFromAsConflict() {
+	let existing = [m("https://a.dev/x/*", "https://a.org/x/*")]
+	let disposition = MappingIO.classify(m("https://a.dev/x/*", "https://other.org/x/*"), against: existing)
+	#expect(disposition == .conflict(existing))
+}
+
+@Test func classifyMarksSharedToAsConflict() {
+	let existing = [m("https://a.dev/x/*", "https://a.org/x/*")]
+	let disposition = MappingIO.classify(m("https://other.dev/x/*", "https://a.org/x/*"), against: existing)
+	#expect(disposition == .conflict(existing))
+}
+
+@Test func classifyMarksModeChangeAsConflict() {
+	// Same from/to but a different mode isn't an exact duplicate — the user
+	// must decide whether the imported mode wins.
+	let existing = [m("https://a.dev/x/*", "https://a.org/x/*", mode: .rewrite)]
+	let disposition = MappingIO.classify(m("https://a.dev/x/*", "https://a.org/x/*", mode: .fallbackOnNotFound), against: existing)
+	#expect(disposition == .conflict(existing))
+}
+
+@Test func classifyMarksUnrelatedAsNew() {
+	let existing = [m("https://a.dev/x/*", "https://a.org/x/*")]
+	#expect(MappingIO.classify(m("https://b.dev/*", "https://b.org/*"), against: existing) == .new)
+}
+
+@Test func applyAddsNewSkipsDuplicatesOverwritesConflicts() throws {
+	let a = m("https://a.dev/x/*", "https://a.org/x/*")
+	let b = m("https://b.dev/y/*", "https://b.org/y/*")
+	let accepted = [
+		m("https://a.dev/x/*", "https://a.org/x/*"), // duplicate of a
+		m("https://b.dev/y/*", "https://new.org/y/*", mode: .fallbackOnNotFound), // same from as b
+		m("https://c.dev/z/*", "https://c.org/z/*"), // new
 	]
-	let merged = MappingIO.merge(existing: existing, imported: imported)
-	#expect(merged.count == 2) // duplicate skipped, one added
-	#expect(merged[0].id == existing[0].id) // existing untouched
-	let added = merged.first { $0.from == "https://c.dev/z/*" }
-	#expect(added?.mode == .fallbackOnNotFound)
-	#expect(added?.id != imported[1].id) // fresh id assigned
+	let result = MappingIO.apply(existing: [a, b], accepted: accepted)
+	#expect(result.added == 1)
+	#expect(result.replaced == 1)
+	#expect(result.unchanged == 1)
+	try #require(result.mappings.count == 3)
+	#expect(result.mappings[0] == a) // untouched
+	#expect(result.mappings[1].id == b.id) // overwritten in place, id stable
+	#expect(result.mappings[1].to == "https://new.org/y/*")
+	#expect(result.mappings[1].mode == .fallbackOnNotFound)
+	let added = result.mappings[2]
+	#expect(added.from == "https://c.dev/z/*")
+	#expect(added.id != accepted[2].id) // fresh id, never the imported file's id
+}
+
+@Test func applyOverwriteConsumesEveryConflictingExisting() throws {
+	// The imported mapping's from matches one existing and its to matches
+	// another: overwrite replaces both with the single imported mapping.
+	let a = m("https://a.dev/x/*", "https://a.org/x/*")
+	let b = m("https://b.dev/y/*", "https://b.org/y/*")
+	let result = MappingIO.apply(existing: [a, b], accepted: [m("https://a.dev/x/*", "https://b.org/y/*")])
+	try #require(result.mappings.count == 1)
+	#expect(result.mappings[0].id == a.id)
+	#expect(result.mappings[0].from == "https://a.dev/x/*")
+	#expect(result.mappings[0].to == "https://b.org/y/*")
+	#expect(result.replaced == 1)
+}
+
+@Test func applyLeavesExistingUntouchedWhenNothingAccepted() {
+	let a = m("https://a.dev/x/*", "https://a.org/x/*")
+	let result = MappingIO.apply(existing: [a], accepted: [])
+	#expect(result.mappings == [a])
+	#expect(result.added == 0 && result.replaced == 0 && result.unchanged == 0)
 }
 
 @Test func proxyRestoreStoreRoundTripsAndClears() throws {

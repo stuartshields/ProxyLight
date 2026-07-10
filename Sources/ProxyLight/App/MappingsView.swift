@@ -5,6 +5,7 @@ import SwiftUI
 struct MappingsView: View {
 	@ObservedObject var state: AppState
 	@State private var editorTarget: EditorTarget?
+	@State private var showExportSheet = false
 
 	// Drives the single add/edit sheet. `.add` starts empty; `.edit` pre-fills
 	// the chosen mapping.
@@ -51,7 +52,7 @@ struct MappingsView: View {
 				Button("Add Mapping…") { editorTarget = .add }
 				HStack {
 					Button("Import…") { state.importMappings() }
-					Button("Export…") { state.exportMappings() }
+					Button("Export…") { showExportSheet = true }
 						.disabled(state.config.mappings.isEmpty)
 					Spacer()
 				}
@@ -61,7 +62,7 @@ struct MappingsView: View {
 						.foregroundStyle(.secondary)
 				}
 			} footer: {
-				Text("Export shares your mappings as a JSON file; Import merges another file's mappings into yours (duplicates skipped).")
+				Text("Export writes the mappings you choose to a JSON file; Import lets you pick which of a file's mappings to bring in, and asks before overwriting existing ones.")
 					.font(.caption)
 					.foregroundStyle(.secondary)
 			}
@@ -79,6 +80,16 @@ struct MappingsView: View {
 					from: mapping.from, to: mapping.to, mode: mapping.mode) { from, to, mode in
 					state.updateMapping(id: mapping.id, from: from, to: to, mode: mode)
 				}
+			}
+		}
+		.sheet(isPresented: $showExportSheet) {
+			ExportSelectionView(mappings: state.config.mappings) { selected in
+				state.exportMappings(selected)
+			}
+		}
+		.sheet(item: $state.pendingImport) { pending in
+			ImportSelectionView(imported: pending.mappings, existing: state.config.mappings) { accepted in
+				state.completeImport(accepted: accepted)
 			}
 		}
 	}
