@@ -15,6 +15,10 @@ final class AppState: ObservableObject {
 	@Published var isRunning = false
 	@Published var statusMessage = "Stopped"
 	@Published var caAvailable: Bool
+	// Live keychain state: whether the CA root has user-domain trust settings.
+	// Refreshed at launch and after trusting, so it survives app replacement
+	// and reflects trust revoked in Keychain Access.
+	@Published var caTrusted = false
 	@Published var trustStatus: String = ""
 	@Published var transferStatus: String = ""
 	@Published var launchAtLogin = false
@@ -48,6 +52,7 @@ final class AppState: ObservableObject {
 		recoverFromUncleanExit()
 		installTerminationHandlers()
 		refreshLaunchAtLogin()
+		refreshCATrust()
 		// Honor "start at login": if we're a registered login item, come up
 		// running so traffic is routed without the user clicking anything.
 		if case .enabled = loginItemManager.state {
@@ -224,10 +229,19 @@ final class AppState: ObservableObject {
 		}
 		do {
 			try CATrustManager().trust(certificateURL: ca.rootCertificateURL)
-			trustStatus = "Certificate trusted for your user account. Restart your browser to pick up the change."
+			trustStatus = "Restart your browser to pick up the change."
 		} catch {
 			trustStatus = "Failed to trust certificate: \(error.localizedDescription)"
 		}
+		refreshCATrust()
+	}
+
+	private func refreshCATrust() {
+		guard let ca else {
+			caTrusted = false
+			return
+		}
+		caTrusted = CATrustManager().isTrusted(certificateURL: ca.rootCertificateURL)
 	}
 
 	func setLaunchAtLogin(_ enabled: Bool) {

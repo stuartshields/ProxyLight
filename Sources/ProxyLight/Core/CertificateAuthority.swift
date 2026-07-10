@@ -4,7 +4,10 @@ import X509
 import SwiftASN1
 import NIOSSL
 
-final class CertificateAuthority {
+// @unchecked Sendable: every stored property is an immutable `let` except
+// `leafCache`, whose every access is guarded by `lock` (see serverContext).
+// Instances are shared across NIO event-loop threads by ConnectHandler.
+final class CertificateAuthority: @unchecked Sendable {
 	private let caPrivateKey: Certificate.PrivateKey
 	private let caCertificate: Certificate
 	private var leafCache: [String: NIOSSLContext] = [:]

@@ -13,7 +13,7 @@ final class ConnectHandler: ChannelInboundHandler, RemovableChannelHandler {
 	typealias InboundIn = HTTPServerRequestPart
 	typealias OutboundOut = HTTPServerResponsePart
 
-	private let engineProvider: () -> MappingEngine
+	private let engineProvider: @Sendable () -> MappingEngine
 	private let ca: CertificateAuthority?
 	// Captured at pipeline-install time (see HTTPServerCodec.install below) so
 	// they can be torn down by reference before a CONNECT reconfigures the
@@ -30,7 +30,7 @@ final class ConnectHandler: ChannelInboundHandler, RemovableChannelHandler {
 	// pipeline for MITM/tunnel.
 	private var installedGlueHandler: ProxyGlueHandler?
 
-	init(engineProvider: @escaping () -> MappingEngine, ca: CertificateAuthority?, httpServerCodecHandlers: [RemovableChannelHandler]) {
+	init(engineProvider: @escaping @Sendable () -> MappingEngine, ca: CertificateAuthority?, httpServerCodecHandlers: [RemovableChannelHandler]) {
 		self.engineProvider = engineProvider
 		self.ca = ca
 		self.httpServerCodecHandlers = httpServerCodecHandlers
@@ -78,7 +78,9 @@ final class ConnectHandler: ChannelInboundHandler, RemovableChannelHandler {
 		let channel = context.channel
 		let engineProvider = self.engineProvider
 		respondConnectEstablished(context: context) {
-			self.teardownHTTPServerPipeline(channel: channel).whenComplete { result in
+			// Same event loop end to end (the teardown future completes on this
+			// channel's loop), so the callback may hold non-Sendable state.
+			self.teardownHTTPServerPipeline(channel: channel).assumeIsolated().whenComplete { result in
 				guard case .success = result else {
 					channel.close(promise: nil)
 					return
@@ -90,18 +92,16 @@ final class ConnectHandler: ChannelInboundHandler, RemovableChannelHandler {
 
 	// Rebuilds the channel from scratch: TLS server termination, then a fresh
 	// HTTP server codec stack, then a ProxyGlueHandler that rewrites the
-	// decrypted inner requests and forwards them upstream over TLS.
-	private static func installMITMPipeline(channel: Channel, host: String, ca: CertificateAuthority, engineProvider: @escaping () -> MappingEngine) {
+	// decrypted inner requests and forwards them upstream over TLS. Always
+	// called on `channel`'s event loop (from the teardown future's callback),
+	// so the pipeline can be assembled synchronously via syncOperations.
+	private static func installMITMPipeline(channel: Channel, host: String, ca: CertificateAuthority, engineProvider: @escaping @Sendable () -> MappingEngine) {
 		do {
 			let tls = try ca.serverContext(forHost: host)
-			let sslHandler = NIOSSLServerHandler(context: tls)
-			channel.pipeline.addHandler(sslHandler).flatMap {
-				channel.eventLoop.makeCompletedFuture(withResultOf: {
-					_ = try HTTPServerCodec.install(on: channel)
-				})
-			}.flatMap {
-				channel.pipeline.addHandler(ProxyGlueHandler(engineProvider: engineProvider, scheme: "https", hostOverride: host))
-			}.whenFailure { _ in channel.close(promise: nil) }
+			let ops = channel.pipeline.syncOperations
+			try ops.addHandler(NIOSSLServerHandler(context: tls))
+			_ = try HTTPServerCodec.install(on: channel)
+			try ops.addHandler(ProxyGlueHandler(engineProvider: engineProvider, scheme: "https", hostOverride: host))
 		} catch {
 			channel.close(promise: nil)
 		}
@@ -114,11 +114,17 @@ final class ConnectHandler: ChannelInboundHandler, RemovableChannelHandler {
 
 		// Connect upstream BEFORE answering 200, so a dead upstream still gets
 		// a real error response instead of a tunnel to nowhere.
+		// The bootstrap group IS the inbound channel's loop, so every callback
+		// below runs on that one loop — assumeIsolated() makes the compiler
+		// accept the non-Sendable captures and asserts that fact at runtime.
 		ClientBootstrap(group: context.eventLoop)
 			.channelInitializer { upstream in
-				upstream.pipeline.addHandler(TunnelRelayHandler(peer: inbound))
+				upstream.eventLoop.makeCompletedFuture {
+					try upstream.pipeline.syncOperations.addHandler(TunnelRelayHandler(peer: inbound))
+				}
 			}
 			.connect(host: host, port: port)
+			.assumeIsolated()
 			.whenComplete { [weak self] result in
 				guard let self else {
 					// ConnectHandler was torn down (e.g. inbound already closed)
@@ -132,13 +138,18 @@ final class ConnectHandler: ChannelInboundHandler, RemovableChannelHandler {
 				switch result {
 				case .success(let upstream):
 					self.respondConnectEstablished(context: context) {
-						self.teardownHTTPServerPipeline(channel: inbound).whenComplete { result in
+						self.teardownHTTPServerPipeline(channel: inbound).assumeIsolated().whenComplete { result in
 							guard case .success = result else {
 								inbound.close(promise: nil)
 								upstream.close(promise: nil)
 								return
 							}
-							_ = inbound.pipeline.addHandler(TunnelRelayHandler(peer: upstream))
+							do {
+								try inbound.pipeline.syncOperations.addHandler(TunnelRelayHandler(peer: upstream))
+							} catch {
+								inbound.close(promise: nil)
+								upstream.close(promise: nil)
+							}
 						}
 					}
 				case .failure:
@@ -163,7 +174,9 @@ final class ConnectHandler: ChannelInboundHandler, RemovableChannelHandler {
 		headers.add(name: "Content-Length", value: "0")
 		let head = HTTPResponseHead(version: .http1_1, status: .init(statusCode: 200, reasonPhrase: "Connection Established"), headers: headers)
 		context.write(wrapOutboundOut(.head(head)), promise: nil)
-		context.writeAndFlush(wrapOutboundOut(.end(nil))).whenComplete { _ in
+		// Write future completes on this channel's loop; `then` may capture
+		// non-Sendable pipeline state.
+		context.writeAndFlush(wrapOutboundOut(.end(nil))).assumeIsolated().whenComplete { _ in
 			then()
 		}
 	}
@@ -176,8 +189,12 @@ final class ConnectHandler: ChannelInboundHandler, RemovableChannelHandler {
 		// after it — `.after(self)` would need `ConnectHandler: Sendable`.
 		let glue = ProxyGlueHandler(engineProvider: engineProvider)
 		installedGlueHandler = glue
-		context.pipeline.addHandler(glue).whenFailure { [weak context] _ in
-			context?.close(promise: nil)
+		// channelRead runs on the channel's loop, so the handler can be added
+		// synchronously.
+		do {
+			try context.pipeline.syncOperations.addHandler(glue)
+		} catch {
+			context.close(promise: nil)
 		}
 	}
 
@@ -214,7 +231,7 @@ final class TunnelRelayHandler: ChannelInboundHandler {
 	}
 
 	func channelRead(context: ChannelHandlerContext, data: NIOAny) {
-		peer.writeAndFlush(data, promise: nil)
+		peer.writeAndFlush(unwrapInboundIn(data), promise: nil)
 	}
 
 	func channelInactive(context: ChannelHandlerContext) {

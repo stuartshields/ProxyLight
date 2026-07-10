@@ -12,7 +12,11 @@ import NIOSSL
 
 	// A raw TCP origin that replies "PONG" to any bytes.
 	let origin = try ServerBootstrap(group: group)
-		.childChannelInitializer { $0.pipeline.addHandler(PongHandler()) }
+		.childChannelInitializer { channel in
+			channel.eventLoop.makeCompletedFuture {
+				try channel.pipeline.syncOperations.addHandler(PongHandler())
+			}
+		}
 		.bind(host: "127.0.0.1", port: 0).wait()
 	defer { try? origin.close().wait() }
 	let originPort = origin.localAddress!.port!
@@ -59,7 +63,11 @@ private func connectThenSend(proxyPort: Int, target: String, payload: String, gr
 	}
 	let promise = group.next().makePromise(of: String.self)
 	let channel = try ClientBootstrap(group: group)
-		.channelInitializer { $0.pipeline.addHandler(Collector(promise, payload: payload)) }
+		.channelInitializer { channel in
+			channel.eventLoop.makeCompletedFuture {
+				try channel.pipeline.syncOperations.addHandler(Collector(promise, payload: payload))
+			}
+		}
 		.connect(host: "127.0.0.1", port: proxyPort).wait()
 	let connect = "CONNECT \(target) HTTP/1.1\r\nHost: \(target)\r\n\r\n"
 	var buf = channel.allocator.buffer(capacity: connect.utf8.count)
@@ -87,8 +95,9 @@ private func startPlainEchoOrigin(group: EventLoopGroup) throws -> (channel: Cha
 	let bootstrap = ServerBootstrap(group: group)
 		.serverChannelOption(ChannelOptions.backlog, value: 16)
 		.childChannelInitializer { channel in
-			channel.pipeline.configureHTTPServerPipeline().flatMap {
-				channel.pipeline.addHandler(PlainEchoOriginHandler())
+			channel.eventLoop.makeCompletedFuture {
+				try channel.pipeline.syncOperations.configureHTTPServerPipeline()
+				try channel.pipeline.syncOperations.addHandler(PlainEchoOriginHandler())
 			}
 		}
 	let channel = try bootstrap.bind(host: "127.0.0.1", port: 0).wait()
@@ -198,13 +207,15 @@ private func performTunnelledTLSRequest(proxyPort: Int, connectTarget: String, s
 	let promise = group.next().makePromise(of: String.self)
 	let channel = try ClientBootstrap(group: group)
 		.channelInitializer { channel in
-			channel.pipeline.addHandler(TunnelledTLSRequestHandler(
-				connectTarget: connectTarget,
-				sniHostname: sniHostname,
-				sslContext: sslContext,
-				innerRequestRaw: innerRequestRaw,
-				promise: promise
-			))
+			channel.eventLoop.makeCompletedFuture {
+				try channel.pipeline.syncOperations.addHandler(TunnelledTLSRequestHandler(
+					connectTarget: connectTarget,
+					sniHostname: sniHostname,
+					sslContext: sslContext,
+					innerRequestRaw: innerRequestRaw,
+					promise: promise
+				))
+			}
 		}
 		.connect(host: "127.0.0.1", port: proxyPort).wait()
 	defer { try? channel.close().wait() }
@@ -270,21 +281,14 @@ private final class TunnelledTLSRequestHandler: ChannelInboundHandler {
 	}
 
 	private func startTLSThenSendInnerRequest(context: ChannelHandlerContext) {
+		// channelRead runs on the channel's loop, so the SSL handler can be
+		// inserted synchronously and the inner request written right after.
 		do {
 			let ssl = try NIOSSLClientHandler(context: sslContext, serverHostname: sniHostname)
-			let innerRequestRaw = self.innerRequestRaw
-			let promise = self.promise
-			context.pipeline.addHandler(ssl, position: .first).whenComplete { [weak context] result in
-				switch result {
-				case .success:
-					guard let context else { return }
-					var buf = context.channel.allocator.buffer(capacity: innerRequestRaw.utf8.count)
-					buf.writeString(innerRequestRaw)
-					context.writeAndFlush(NIOAny(buf), promise: nil)
-				case .failure(let error):
-					promise.fail(error)
-				}
-			}
+			try context.pipeline.syncOperations.addHandler(ssl, position: .first)
+			var buf = context.channel.allocator.buffer(capacity: innerRequestRaw.utf8.count)
+			buf.writeString(innerRequestRaw)
+			context.writeAndFlush(wrapOutboundOut(buf), promise: nil)
 		} catch {
 			promise.fail(error)
 		}
@@ -315,7 +319,11 @@ private final class TunnelledTLSRequestHandler: ChannelInboundHandler {
 	// Raw TCP origin for the CONNECT target that follows on the SAME
 	// connection as the plain request below.
 	let tunnelOrigin = try ServerBootstrap(group: group)
-		.childChannelInitializer { $0.pipeline.addHandler(PongHandler()) }
+		.childChannelInitializer { channel in
+			channel.eventLoop.makeCompletedFuture {
+				try channel.pipeline.syncOperations.addHandler(PongHandler())
+			}
+		}
 		.bind(host: "127.0.0.1", port: 0).wait()
 	defer { try? tunnelOrigin.close().wait() }
 	let tunnelOriginPort = tunnelOrigin.localAddress!.port!
@@ -351,13 +359,15 @@ private func plainRequestThenConnectOnSameConnection(proxyPort: Int, plainReques
 
 	let channel = try ClientBootstrap(group: group)
 		.channelInitializer { channel in
-			channel.pipeline.addHandler(PlainThenConnectHandler(
-				plainRequestRaw: plainRequestRaw,
-				connectTarget: connectTarget,
-				tunnelPayload: tunnelPayload,
-				plainResponsePromise: plainResponsePromise,
-				tunnelReplyPromise: tunnelReplyPromise
-			))
+			channel.eventLoop.makeCompletedFuture {
+				try channel.pipeline.syncOperations.addHandler(PlainThenConnectHandler(
+					plainRequestRaw: plainRequestRaw,
+					connectTarget: connectTarget,
+					tunnelPayload: tunnelPayload,
+					plainResponsePromise: plainResponsePromise,
+					tunnelReplyPromise: tunnelReplyPromise
+				))
+			}
 		}
 		.connect(host: "127.0.0.1", port: proxyPort).wait()
 	defer { try? channel.close().wait() }
@@ -469,7 +479,10 @@ private final class PlainThenConnectHandler: ChannelInboundHandler {
 }
 
 private func readConnectResponse(proxyPort: Int, connectTarget: String, group: EventLoopGroup) throws -> String {
-	final class Collector: ChannelInboundHandler {
+	// @unchecked Sendable: constructed on the test thread but its mutable state
+	// (acc/done) is only ever touched on the channel's event loop — channelRead
+	// runs there, and timeout() fires from scheduleTask on that same loop.
+	final class Collector: ChannelInboundHandler, @unchecked Sendable {
 		typealias InboundIn = ByteBuffer
 		typealias OutboundOut = ByteBuffer
 		let promise: EventLoopPromise<String>

@@ -12,7 +12,7 @@ final class ProxyGlueHandler: ChannelInboundHandler, RemovableChannelHandler {
 	typealias InboundIn = HTTPServerRequestPart
 	typealias OutboundOut = HTTPServerResponsePart
 
-	private let engineProvider: () -> MappingEngine
+	private let engineProvider: @Sendable () -> MappingEngine
 	private var upstream: Channel?
 	private var pendingBody: [ByteBuffer] = []
 	private var pendingEnd = false
@@ -25,7 +25,7 @@ final class ProxyGlueHandler: ChannelInboundHandler, RemovableChannelHandler {
 	// now-orphaned upstream channel instead of leaking the socket.
 	private var inboundActive = true
 
-	init(engineProvider: @escaping () -> MappingEngine, scheme: String = "http", hostOverride: String? = nil) {
+	init(engineProvider: @escaping @Sendable () -> MappingEngine, scheme: String = "http", hostOverride: String? = nil) {
 		self.engineProvider = engineProvider
 		self.inboundScheme = scheme
 		self.inboundHostOverride = hostOverride
@@ -126,27 +126,24 @@ final class ProxyGlueHandler: ChannelInboundHandler, RemovableChannelHandler {
 
 	private func openUpstream(inbound: Channel, eventLoop: EventLoop, scheme: String, host: String, port: Int, head: HTTPRequestHead, responder: ChannelHandler) {
 		let useTLS = scheme == "https"
+		// The upstream channel lives on the same loop as the inbound channel
+		// (the bootstrap group IS that loop), so the non-Sendable responder can
+		// cross into the @Sendable initializer via NIOLoopBound — created here
+		// on the loop, unwrapped in the initializer on the same loop.
+		let boundResponder = NIOLoopBound(responder, eventLoop: eventLoop)
 		let bootstrap = ClientBootstrap(group: eventLoop)
 			.channelInitializer { channel in
-				let addTLS: EventLoopFuture<Void>
-				if useTLS {
-					do {
+				channel.eventLoop.makeCompletedFuture {
+					let ops = channel.pipeline.syncOperations
+					if useTLS {
 						let tls = try NIOSSLClientContextCache.context()
-						let ssl = try NIOSSLClientHandler(context: tls, serverHostname: host)
-						addTLS = channel.pipeline.addHandler(ssl)
-					} catch {
-						return channel.eventLoop.makeFailedFuture(error)
+						try ops.addHandler(NIOSSLClientHandler(context: tls, serverHostname: host))
 					}
-				} else {
-					addTLS = channel.eventLoop.makeSucceededVoidFuture()
-				}
-				return addTLS.flatMap {
-					channel.pipeline.addHTTPClientHandlers().flatMap {
-						channel.pipeline.addHandler(responder)
-					}
+					try ops.addHTTPClientHandlers()
+					try ops.addHandler(boundResponder.value)
 				}
 			}
-		bootstrap.connect(host: host, port: port).whenComplete { [weak self] result in
+		bootstrap.connect(host: host, port: port).assumeIsolated().whenComplete { [weak self] result in
 			switch result {
 			case .success(let channel):
 				// The inbound client disconnected while this connect was in
