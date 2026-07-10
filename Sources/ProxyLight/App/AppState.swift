@@ -43,6 +43,10 @@ final class AppState: ObservableObject {
 	private var server: ProxyServer?
 	private var savedProxyState: ProxyState?
 	private var activeService: String?
+	private var runningPort: Int?
+	// Bumped on every mapping save while running; forces macOS to re-fetch the
+	// PAC (which it caches by URL) by changing the ?v= query param.
+	private var pacVersion = 0
 	private var signalSources: [DispatchSourceSignal] = []
 	// Live mapping set read by the proxy's engineProvider closure from NIO
 	// event-loop threads. Kept in sync with config.mappings on every save().
@@ -119,6 +123,10 @@ final class AppState: ObservableObject {
 		isRunning ? stop() : start()
 	}
 
+	private func pacURL(port: Int) -> String {
+		"http://127.0.0.1:\(port)/proxy.pac?v=\(pacVersion)"
+	}
+
 	private func start() {
 		let currentConfig = config
 		// Capture only the thread-safe box, not self/currentConfig, so edits made
@@ -139,9 +147,11 @@ final class AppState: ObservableObject {
 			// Persist the restore point BEFORE applying, so an unclean exit at any
 			// point after this can still be recovered on the next launch.
 			restoreStore.save(RestorePoint(service: service, state: snapshot))
-			try proxyManager.apply(host: "127.0.0.1", port: boundPort, service: service)
+			pacVersion = 1
+			try proxyManager.apply(pacURL: pacURL(port: boundPort), service: service)
+			runningPort = boundPort
 			isRunning = true
-			statusMessage = "Running on 127.0.0.1:\(boundPort)"
+			statusMessage = "Running on 127.0.0.1:\(boundPort) (PAC)"
 		} catch {
 			if let service = activeService, let saved = savedProxyState {
 				try? proxyManager.restore(saved, service: service)
@@ -150,7 +160,7 @@ final class AppState: ObservableObject {
 			try? server.stop()
 			self.server = nil
 			isRunning = false
-			statusMessage = "Failed: \(error.localizedDescription). Set proxy to 127.0.0.1:\(currentConfig.listenPort) manually."
+			statusMessage = "Failed: \(error.localizedDescription). Set the Automatic Proxy Configuration URL to http://127.0.0.1:\(currentConfig.listenPort)/proxy.pac manually."
 		}
 	}
 
@@ -164,6 +174,7 @@ final class AppState: ObservableObject {
 		try? server?.stop()
 		server = nil
 		activeService = nil
+		runningPort = nil
 		savedProxyState = nil
 		isRunning = false
 		statusMessage = "Stopped"
@@ -235,6 +246,21 @@ final class AppState: ObservableObject {
 	func save() {
 		mappingsBox.set(config.mappings)
 		try? store.save(config)
+		refreshPACIfRunning()
+	}
+
+	// Mapping edits change which hosts the PAC routes through the proxy, and
+	// macOS caches the PAC by URL — so bump ?v= and re-apply. A networksetup
+	// hiccup must not roll back the saved mapping; surface it instead.
+	private func refreshPACIfRunning() {
+		guard isRunning, let service = activeService, let port = runningPort else { return }
+		pacVersion += 1
+		do {
+			try proxyManager.refreshAutoProxyURL(pacURL(port: port), service: service)
+			statusMessage = "Running on 127.0.0.1:\(port) (PAC)"
+		} catch {
+			statusMessage = "Mapping saved, but the system PAC may be stale — toggle the proxy off and on."
+		}
 	}
 
 	var rootCertificatePEM: String { ca?.rootCertificatePEM ?? "Certificate authority unavailable" }

@@ -39,6 +39,37 @@ struct ProxyState: Codable, Equatable {
 	var secureEnabled: Bool
 	var secureHost: String
 	var securePort: Int
+	var autoEnabled: Bool
+	var autoURL: String
+
+	init(webEnabled: Bool, webHost: String, webPort: Int,
+		secureEnabled: Bool, secureHost: String, securePort: Int,
+		autoEnabled: Bool = false, autoURL: String = "") {
+		self.webEnabled = webEnabled
+		self.webHost = webHost
+		self.webPort = webPort
+		self.secureEnabled = secureEnabled
+		self.secureHost = secureHost
+		self.securePort = securePort
+		self.autoEnabled = autoEnabled
+		self.autoURL = autoURL
+	}
+
+	// Custom decode so restore points written before PAC mode still load: the
+	// missing auto fields default to "off", which is correct — pre-PAC
+	// ProxyLight never enabled the system autoproxy. (Same pattern as
+	// Mapping.mode.)
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		webEnabled = try c.decode(Bool.self, forKey: .webEnabled)
+		webHost = try c.decode(String.self, forKey: .webHost)
+		webPort = try c.decode(Int.self, forKey: .webPort)
+		secureEnabled = try c.decode(Bool.self, forKey: .secureEnabled)
+		secureHost = try c.decode(String.self, forKey: .secureHost)
+		securePort = try c.decode(Int.self, forKey: .securePort)
+		autoEnabled = try c.decodeIfPresent(Bool.self, forKey: .autoEnabled) ?? false
+		autoURL = try c.decodeIfPresent(String.self, forKey: .autoURL) ?? ""
+	}
 
 	// A ProxyLight session that quit or crashed without restoring can leave the
 	// system proxy pointing at our own loopback listener. When we snapshot the
@@ -54,6 +85,12 @@ struct ProxyState: Codable, Equatable {
 		}
 		if s.secureEnabled, loopback.contains(s.secureHost.lowercased()), s.securePort == selfPort {
 			s.secureEnabled = false
+		}
+		if s.autoEnabled,
+			let comps = URLComponents(string: s.autoURL),
+			let host = comps.host, loopback.contains(host.lowercased()),
+			comps.port == selfPort {
+			s.autoEnabled = false
 		}
 		return s
 	}
@@ -88,17 +125,28 @@ struct SystemProxyManager {
 	func snapshot(service: String) throws -> ProxyState {
 		let web = Self.parseProxy(try runner.run(networksetup, ["-getwebproxy", service]))
 		let secure = Self.parseProxy(try runner.run(networksetup, ["-getsecurewebproxy", service]))
+		let auto = Self.parseAutoProxy(try runner.run(networksetup, ["-getautoproxyurl", service]))
 		return ProxyState(
 			webEnabled: web.enabled, webHost: web.host, webPort: web.port,
-			secureEnabled: secure.enabled, secureHost: secure.host, securePort: secure.port
+			secureEnabled: secure.enabled, secureHost: secure.host, securePort: secure.port,
+			autoEnabled: auto.enabled, autoURL: auto.url
 		)
 	}
 
-	func apply(host: String, port: Int, service: String) throws {
-		_ = try runner.run(networksetup, ["-setwebproxy", service, host, String(port)])
-		_ = try runner.run(networksetup, ["-setsecurewebproxy", service, host, String(port)])
-		_ = try runner.run(networksetup, ["-setwebproxystate", service, "on"])
-		_ = try runner.run(networksetup, ["-setsecurewebproxystate", service, "on"])
+	func apply(pacURL: String, service: String) throws {
+		_ = try runner.run(networksetup, ["-setautoproxyurl", service, pacURL])
+		_ = try runner.run(networksetup, ["-setautoproxystate", service, "on"])
+		// ProxyLight owns proxy policy while running: a stale global-proxy
+		// entry (e.g. left by a crashed pre-PAC version) must not fight the
+		// PAC. The prior values are in the snapshot and come back on restore.
+		_ = try runner.run(networksetup, ["-setwebproxystate", service, "off"])
+		_ = try runner.run(networksetup, ["-setsecurewebproxystate", service, "off"])
+	}
+
+	// Cache buster: macOS caches the PAC by URL, so mapping edits re-apply the
+	// URL with a bumped ?v= to force a re-fetch.
+	func refreshAutoProxyURL(_ url: String, service: String) throws {
+		_ = try runner.run(networksetup, ["-setautoproxyurl", service, url])
 	}
 
 	func restore(_ state: ProxyState, service: String) throws {
@@ -113,6 +161,12 @@ struct SystemProxyManager {
 			_ = try runner.run(networksetup, ["-setsecurewebproxystate", service, "on"])
 		} else {
 			_ = try runner.run(networksetup, ["-setsecurewebproxystate", service, "off"])
+		}
+		if state.autoEnabled {
+			_ = try runner.run(networksetup, ["-setautoproxyurl", service, state.autoURL])
+			_ = try runner.run(networksetup, ["-setautoproxystate", service, "on"])
+		} else {
+			_ = try runner.run(networksetup, ["-setautoproxystate", service, "off"])
 		}
 	}
 
@@ -141,5 +195,24 @@ struct SystemProxyManager {
 			}
 		}
 		return (enabled, host, port)
+	}
+
+	// `-getautoproxyurl` output:
+	//   URL: http://corp.example.com/proxy.pac
+	//   Enabled: Yes
+	// maxSplits: 1 keeps the URL's own colons intact.
+	private static func parseAutoProxy(_ output: String) -> (enabled: Bool, url: String) {
+		var enabled = false
+		var url = ""
+		for line in output.split(separator: "\n") {
+			let parts = line.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+			guard parts.count == 2 else { continue }
+			switch parts[0] {
+			case "Enabled": enabled = parts[1] == "Yes"
+			case "URL": url = parts[1] == "(null)" ? "" : parts[1]
+			default: break
+			}
+		}
+		return (enabled, url)
 	}
 }

@@ -50,6 +50,15 @@ struct MappingEngine {
 		hostsInScope.contains(HostKey(scheme: scheme, host: host.lowercased(), port: port))
 	}
 
+	// Hostnames (lowercased, deduplicated, sorted for determinism) of every
+	// enabled mapping's "from" side — the set the PAC routes through the proxy.
+	// Hostname-only on purpose: broader than HostKey (no scheme/port) because
+	// PAC over-inclusion is safe (extra hosts just take the pass-through
+	// paths) while under-inclusion silently breaks rewriting.
+	var pacHostnames: [String] {
+		Set(hostsInScope.map { $0.host }).sorted()
+	}
+
 	func rewrite(scheme: String, host: String, port: Int, uri: String) -> RewriteResult? {
 		let host = host.lowercased()
 		let (path, query) = Self.splitQuery(uri)

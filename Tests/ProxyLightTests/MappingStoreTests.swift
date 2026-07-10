@@ -72,23 +72,14 @@ private final class FakeRunner: CommandRunner {
 @Test func snapshotParsesNetworksetupOutput() throws {
 	let webOut = "Enabled: Yes\nServer: 127.0.0.1\nPort: 9876\nAuthenticated Proxy Enabled: 0\n"
 	let secureOut = "Enabled: No\nServer:\nPort: 0\nAuthenticated Proxy Enabled: 0\n"
-	let runner = FakeRunner([webOut, secureOut])
+	let autoOut = "URL: (null)\nEnabled: No\n"
+	let runner = FakeRunner([webOut, secureOut, autoOut])
 	let mgr = SystemProxyManager(runner: runner)
 	let state = try mgr.snapshot(service: "Wi-Fi")
 	#expect(state.webEnabled == true)
 	#expect(state.webHost == "127.0.0.1")
 	#expect(state.webPort == 9876)
 	#expect(state.secureEnabled == false)
-}
-
-@Test func applyIssuesBothProxyCommands() throws {
-	let runner = FakeRunner([])
-	let mgr = SystemProxyManager(runner: runner)
-	try mgr.apply(host: "127.0.0.1", port: 9876, service: "Wi-Fi")
-	#expect(runner.calls.contains(["-setwebproxy", "Wi-Fi", "127.0.0.1", "9876"]))
-	#expect(runner.calls.contains(["-setsecurewebproxy", "Wi-Fi", "127.0.0.1", "9876"]))
-	#expect(runner.calls.contains(["-setwebproxystate", "Wi-Fi", "on"]))
-	#expect(runner.calls.contains(["-setsecurewebproxystate", "Wi-Fi", "on"]))
 }
 
 @Test func restoreReenablesPreviouslyEnabledProxy() throws {
@@ -114,6 +105,59 @@ private final class FakeRunner: CommandRunner {
 	// Must NOT re-apply host/port when the prior state was disabled.
 	#expect(!runner.calls.contains { $0.first == "-setwebproxy" })
 	#expect(!runner.calls.contains { $0.first == "-setsecurewebproxy" })
+}
+
+@Test func applyPACSetsAutoProxyAndDisablesGlobalProxies() throws {
+	let runner = FakeRunner([])
+	let mgr = SystemProxyManager(runner: runner)
+	try mgr.apply(pacURL: "http://127.0.0.1:9876/proxy.pac?v=1", service: "Wi-Fi")
+	#expect(runner.calls.contains(["-setautoproxyurl", "Wi-Fi", "http://127.0.0.1:9876/proxy.pac?v=1"]))
+	#expect(runner.calls.contains(["-setautoproxystate", "Wi-Fi", "on"]))
+	#expect(runner.calls.contains(["-setwebproxystate", "Wi-Fi", "off"]))
+	#expect(runner.calls.contains(["-setsecurewebproxystate", "Wi-Fi", "off"]))
+	// PAC mode must NOT configure the global proxies' host/port.
+	#expect(!runner.calls.contains { $0.first == "-setwebproxy" })
+	#expect(!runner.calls.contains { $0.first == "-setsecurewebproxy" })
+}
+
+@Test func refreshAutoProxyURLIssuesOnlyTheURLCommand() throws {
+	let runner = FakeRunner([])
+	let mgr = SystemProxyManager(runner: runner)
+	try mgr.refreshAutoProxyURL("http://127.0.0.1:9876/proxy.pac?v=2", service: "Wi-Fi")
+	#expect(runner.calls == [["-setautoproxyurl", "Wi-Fi", "http://127.0.0.1:9876/proxy.pac?v=2"]])
+}
+
+@Test func snapshotParsesAutoProxyOutput() throws {
+	let webOut = "Enabled: No\nServer:\nPort: 0\n"
+	let secureOut = "Enabled: No\nServer:\nPort: 0\n"
+	let autoOut = "URL: http://corp.example.com/proxy.pac\nEnabled: Yes\n"
+	let runner = FakeRunner([webOut, secureOut, autoOut])
+	let mgr = SystemProxyManager(runner: runner)
+	let state = try mgr.snapshot(service: "Wi-Fi")
+	#expect(state.autoEnabled == true)
+	#expect(state.autoURL == "http://corp.example.com/proxy.pac")
+	#expect(runner.calls.contains(["-getautoproxyurl", "Wi-Fi"]))
+}
+
+@Test func restoreReenablesPreviouslyEnabledAutoProxy() throws {
+	let runner = FakeRunner([])
+	let mgr = SystemProxyManager(runner: runner)
+	let state = ProxyState(webEnabled: false, webHost: "", webPort: 0,
+		secureEnabled: false, secureHost: "", securePort: 0,
+		autoEnabled: true, autoURL: "http://corp.example.com/proxy.pac")
+	try mgr.restore(state, service: "Wi-Fi")
+	#expect(runner.calls.contains(["-setautoproxyurl", "Wi-Fi", "http://corp.example.com/proxy.pac"]))
+	#expect(runner.calls.contains(["-setautoproxystate", "Wi-Fi", "on"]))
+}
+
+@Test func restoreTurnsOffPreviouslyDisabledAutoProxy() throws {
+	let runner = FakeRunner([])
+	let mgr = SystemProxyManager(runner: runner)
+	let state = ProxyState(webEnabled: false, webHost: "", webPort: 0,
+		secureEnabled: false, secureHost: "", securePort: 0)
+	try mgr.restore(state, service: "Wi-Fi")
+	#expect(runner.calls.contains(["-setautoproxystate", "Wi-Fi", "off"]))
+	#expect(!runner.calls.contains { $0.first == "-setautoproxyurl" })
 }
 
 @Test func mappingIORoundTrips() throws {
@@ -322,4 +366,38 @@ private func m(_ from: String, _ to: String, mode: MappingMode = .rewrite, enabl
 	#expect(throws: CATrustError.self) {
 		try failingManager.trust(certificateURL: certificateURL)
 	}
+}
+
+@Test func proxyStateDecodesLegacyJSONWithoutAutoFields() throws {
+	// Restore points written by pre-PAC versions lack the auto fields.
+	let json = #"{"webEnabled":true,"webHost":"127.0.0.1","webPort":9876,"secureEnabled":false,"secureHost":"","securePort":0}"#
+	let state = try JSONDecoder().decode(ProxyState.self, from: Data(json.utf8))
+	#expect(state.autoEnabled == false)
+	#expect(state.autoURL == "")
+	#expect(state.webEnabled == true)
+}
+
+@Test func proxyStateRoundTripsAutoFields() throws {
+	let state = ProxyState(webEnabled: false, webHost: "", webPort: 0,
+		secureEnabled: false, secureHost: "", securePort: 0,
+		autoEnabled: true, autoURL: "http://example.com/proxy.pac")
+	let decoded = try JSONDecoder().decode(ProxyState.self, from: JSONEncoder().encode(state))
+	#expect(decoded == state)
+}
+
+@Test func discardsLoopbackSelfReferencingAutoProxyURL() {
+	let state = ProxyState(webEnabled: false, webHost: "", webPort: 0,
+		secureEnabled: false, secureHost: "", securePort: 0,
+		autoEnabled: true, autoURL: "http://127.0.0.1:9876/proxy.pac?v=3")
+	let cleaned = state.discardingLoopbackSelfReference(port: 9876)
+	#expect(cleaned.autoEnabled == false)
+}
+
+@Test func keepsForeignAutoProxyURL() {
+	let state = ProxyState(webEnabled: false, webHost: "", webPort: 0,
+		secureEnabled: false, secureHost: "", securePort: 0,
+		autoEnabled: true, autoURL: "http://corp.example.com/proxy.pac")
+	let cleaned = state.discardingLoopbackSelfReference(port: 9876)
+	#expect(cleaned.autoEnabled == true)
+	#expect(cleaned.autoURL == "http://corp.example.com/proxy.pac")
 }
