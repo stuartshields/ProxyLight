@@ -2,6 +2,13 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
+// Mappings decoded from an import file, staged until the user picks which to
+// keep. Identifiable so it can drive a sheet(item:) presentation.
+struct PendingImport: Identifiable {
+	let id = UUID()
+	var mappings: [Mapping]
+}
+
 @MainActor
 final class AppState: ObservableObject {
 	@Published var config: AppConfig
@@ -12,6 +19,8 @@ final class AppState: ObservableObject {
 	@Published var transferStatus: String = ""
 	@Published var launchAtLogin = false
 	@Published var launchAtLoginStatus: String = ""
+	// A decoded import file awaiting the user's selection in the import sheet.
+	@Published var pendingImport: PendingImport?
 
 	private let store: MappingStore
 	private let restoreStore: ProxyRestoreStore
@@ -151,23 +160,22 @@ final class AppState: ObservableObject {
 		save()
 	}
 
-	func exportMappings() {
-		guard !config.mappings.isEmpty else {
-			transferStatus = "No mappings to export."
-			return
-		}
+	func exportMappings(_ selected: [Mapping]) {
 		let panel = NSSavePanel()
 		panel.nameFieldStringValue = "ProxyLight-mappings.json"
 		panel.allowedContentTypes = [.json]
 		guard panel.runModal() == .OK, let url = panel.url else { return }
 		do {
-			try MappingIO.encode(config.mappings).write(to: url, options: .atomic)
-			transferStatus = "Exported \(config.mappings.count) mapping(s)."
+			try MappingIO.encode(selected).write(to: url, options: .atomic)
+			transferStatus = "Exported \(selected.count) mapping(s)."
 		} catch {
 			transferStatus = "Export failed: \(error.localizedDescription)"
 		}
 	}
 
+	// Decodes the chosen file and stages it; the mappings window presents a
+	// selection sheet for pendingImport, then calls completeImport with the
+	// mappings the user accepted.
 	func importMappings() {
 		let panel = NSOpenPanel()
 		panel.allowedContentTypes = [.json]
@@ -175,15 +183,26 @@ final class AppState: ObservableObject {
 		guard panel.runModal() == .OK, let url = panel.url else { return }
 		do {
 			let imported = try MappingIO.decode(Data(contentsOf: url))
-			let before = config.mappings.count
-			config.mappings = MappingIO.merge(existing: config.mappings, imported: imported)
-			let added = config.mappings.count - before
-			save()
-			transferStatus = "Imported \(added) new mapping(s)"
-				+ (added < imported.count ? " (\(imported.count - added) already present)." : ".")
+			guard !imported.isEmpty else {
+				transferStatus = "No mappings found in that file."
+				return
+			}
+			pendingImport = PendingImport(mappings: imported)
 		} catch {
 			transferStatus = "Import failed: \(error.localizedDescription)"
 		}
+	}
+
+	func completeImport(accepted: [Mapping]) {
+		pendingImport = nil
+		let result = MappingIO.apply(existing: config.mappings, accepted: accepted)
+		config.mappings = result.mappings
+		save()
+		var parts: [String] = []
+		if result.added > 0 { parts.append("\(result.added) added") }
+		if result.replaced > 0 { parts.append("\(result.replaced) overwritten") }
+		if result.unchanged > 0 { parts.append("\(result.unchanged) already present") }
+		transferStatus = parts.isEmpty ? "Nothing imported." : "Imported: " + parts.joined(separator: ", ") + "."
 	}
 
 	func deleteMapping(_ id: Mapping.ID) {

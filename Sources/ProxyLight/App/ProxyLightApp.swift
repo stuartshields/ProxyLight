@@ -11,6 +11,10 @@ struct ProxyLightApp: App {
 		} label: {
 			Image(systemName: state.isRunning ? "arrow.left.arrow.right.circle.fill" : "arrow.left.arrow.right.circle")
 		}
+		Window("Edit Mappings", id: "mappings") {
+			MappingsView(state: state)
+		}
+		.windowResizability(.contentSize)
 		Settings {
 			SettingsView(state: state)
 		}
