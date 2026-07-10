@@ -4,7 +4,7 @@ import NIOCore
 import NIOPosix
 import NIOHTTP1
 import NIOSSL
-@testable import ProxyLight
+@testable import ProxyLightCore
 
 @Test func connectToUnmappedHostBlindTunnels() throws {
 	let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)

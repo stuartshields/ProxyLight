@@ -1,5 +1,5 @@
 import Testing
-@testable import ProxyLight
+@testable import ProxyLightCore
 
 @Test func pacRoutesMappedHostsThroughProxy() {
 	let pac = PACGenerator.generate(hostnames: ["a.example.com", "b.example.com"], proxyPort: 9876)

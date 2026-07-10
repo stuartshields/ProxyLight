@@ -8,9 +8,21 @@ struct MappingStore {
 	}
 
 	static var defaultDirectory: URL {
-		FileManager.default
+		defaultDirectory(environment: ProcessInfo.processInfo.environment)
+	}
+
+	static func defaultDirectory(environment: [String: String]) -> URL {
+		#if os(macOS)
+		return FileManager.default
 			.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
 			.appendingPathComponent("ProxyLight", isDirectory: true)
+		#else
+		if let xdgConfigHome = environment["XDG_CONFIG_HOME"], !xdgConfigHome.isEmpty {
+			return URL(fileURLWithPath: xdgConfigHome).appendingPathComponent("proxylight", isDirectory: true)
+		}
+		let home = environment["HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.path
+		return URL(fileURLWithPath: home).appendingPathComponent(".config/proxylight", isDirectory: true)
+		#endif
 	}
 
 	func load() -> AppConfig {

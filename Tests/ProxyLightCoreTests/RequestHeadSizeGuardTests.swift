@@ -1,7 +1,7 @@
 import Testing
 import NIOCore
 import NIOEmbedded
-@testable import ProxyLight
+@testable import ProxyLightCore
 
 // Exercises `RequestHeadSizeGuard`'s cross-`channelRead` state directly via
 // `EmbeddedChannel`, which feeds one `ByteBuffer` per `writeInbound` call

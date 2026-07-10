@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
+import ProxyLightCore
 
 // Mappings decoded from an import file, staged until the user picks which to
 // keep. Identifiable so it can drive a sheet(item:) presentation.
@@ -11,7 +12,6 @@ struct PendingImport: Identifiable {
 
 @MainActor
 final class AppState: ObservableObject {
-	@Published var config: AppConfig
 	@Published var isRunning = false
 	@Published var statusMessage = "Stopped"
 	@Published var caAvailable: Bool
@@ -36,21 +36,12 @@ final class AppState: ObservableObject {
 	// builds fall back to a version every release beats.
 	static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0-dev"
 
-	private let store: MappingStore
+	private let orchestrator: ProxyOrchestrator
 	private let restoreStore: ProxyRestoreStore
 	private let proxyManager: SystemProxyManager
-	private var ca: CertificateAuthority?
-	private var server: ProxyServer?
 	private var savedProxyState: ProxyState?
 	private var activeService: String?
-	private var runningPort: Int?
-	// Bumped on every mapping save while running; forces macOS to re-fetch the
-	// PAC (which it caches by URL) by changing the ?v= query param.
-	private var pacVersion = 0
 	private var signalSources: [DispatchSourceSignal] = []
-	// Live mapping set read by the proxy's engineProvider closure from NIO
-	// event-loop threads. Kept in sync with config.mappings on every save().
-	private let mappingsBox = MappingsBox([])
 	private let loginItemManager = LoginItemManager()
 	private var updateCheckTimer: Timer?
 
@@ -59,15 +50,31 @@ final class AppState: ObservableObject {
 	private static let launchUpdateCheckDelay: Duration = .seconds(10)
 	private static let backgroundUpdateCheckInterval: TimeInterval = 24 * 60 * 60
 
+	// Computed (not @Published) because the source of truth lives in
+	// orchestrator; objectWillChange is sent manually so SwiftUI bindings
+	// ($state.config.mappings, $state.config.listenPort) still redraw on edit.
+	var config: AppConfig {
+		get { orchestrator.config }
+		set {
+			objectWillChange.send()
+			orchestrator.config = newValue
+		}
+	}
+
+	// Persists the current config and, if running, re-applies the PAC.
+	// Views call this explicitly after a binding-driven edit (mapping toggle,
+	// port field) — see the .onChange/.onSubmit call sites.
+	func save() {
+		orchestrator.save()
+		refreshPACIfRunning()
+	}
+
 	init() {
-		let dir = MappingStore.defaultDirectory
-		store = MappingStore(directory: dir)
+		let dir = ProxyOrchestrator.defaultDirectory
+		orchestrator = ProxyOrchestrator(directory: dir)
 		restoreStore = ProxyRestoreStore(directory: dir)
 		proxyManager = SystemProxyManager()
-		config = store.load()
-		ca = try? CertificateAuthority(directory: dir)
-		caAvailable = ca != nil
-		mappingsBox.set(config.mappings)
+		caAvailable = orchestrator.rootCertificateURL != nil
 
 		recoverFromUncleanExit()
 		installTerminationHandlers()
@@ -123,23 +130,11 @@ final class AppState: ObservableObject {
 		isRunning ? stop() : start()
 	}
 
-	private func pacURL(port: Int) -> String {
-		"http://127.0.0.1:\(port)/proxy.pac?v=\(pacVersion)"
-	}
-
 	private func start() {
-		let currentConfig = config
-		// Capture only the thread-safe box, not self/currentConfig, so edits made
-		// while the proxy is running (toggle/add/delete/edit a mapping) take
-		// effect immediately without a stop/start cycle. Port changes still need
-		// a restart to rebind the listener.
-		let engineProvider: @Sendable () -> MappingEngine = { [mappingsBox] in MappingEngine(mappings: mappingsBox.get()) }
-		let server = ProxyServer(port: currentConfig.listenPort, engineProvider: engineProvider, ca: ca)
 		do {
 			activeService = nil
 			savedProxyState = nil
-			let boundPort = try server.start()
-			self.server = server
+			let boundPort = try orchestrator.start()
 			let service = try proxyManager.activeNetworkService()
 			activeService = service
 			let snapshot = try proxyManager.snapshot(service: service).discardingLoopbackSelfReference(port: boundPort)
@@ -147,9 +142,7 @@ final class AppState: ObservableObject {
 			// Persist the restore point BEFORE applying, so an unclean exit at any
 			// point after this can still be recovered on the next launch.
 			restoreStore.save(RestorePoint(service: service, state: snapshot))
-			pacVersion = 1
-			try proxyManager.apply(pacURL: pacURL(port: boundPort), service: service)
-			runningPort = boundPort
+			try proxyManager.apply(pacURL: orchestrator.pacURL()!, service: service)
 			isRunning = true
 			statusMessage = "Running on 127.0.0.1:\(boundPort) (PAC)"
 		} catch {
@@ -157,10 +150,9 @@ final class AppState: ObservableObject {
 				try? proxyManager.restore(saved, service: service)
 			}
 			restoreStore.clear()
-			try? server.stop()
-			self.server = nil
+			try? orchestrator.stop()
 			isRunning = false
-			statusMessage = "Failed: \(error.localizedDescription). Set the Automatic Proxy Configuration URL to http://127.0.0.1:\(currentConfig.listenPort)/proxy.pac manually."
+			statusMessage = "Failed: \(error.localizedDescription). Set the Automatic Proxy Configuration URL to http://127.0.0.1:\(orchestrator.config.listenPort)/proxy.pac manually."
 		}
 	}
 
@@ -171,26 +163,21 @@ final class AppState: ObservableObject {
 		// Clean shutdown: drop the restore point so the next launch doesn't think
 		// we exited uncleanly.
 		restoreStore.clear()
-		try? server?.stop()
-		server = nil
+		try? orchestrator.stop()
 		activeService = nil
-		runningPort = nil
 		savedProxyState = nil
 		isRunning = false
 		statusMessage = "Stopped"
 	}
 
 	func addMapping(from: String, to: String, mode: MappingMode) {
-		config.mappings.append(Mapping(from: from, to: to, enabled: true, mode: mode))
-		save()
+		orchestrator.addMapping(from: from, to: to, mode: mode)
+		refreshPACIfRunning()
 	}
 
 	func updateMapping(id: Mapping.ID, from: String, to: String, mode: MappingMode) {
-		guard let index = config.mappings.firstIndex(where: { $0.id == id }) else { return }
-		config.mappings[index].from = from
-		config.mappings[index].to = to
-		config.mappings[index].mode = mode
-		save()
+		orchestrator.updateMapping(id: id, from: from, to: to, mode: mode)
+		refreshPACIfRunning()
 	}
 
 	func exportMappings(_ selected: [Mapping]) {
@@ -199,7 +186,7 @@ final class AppState: ObservableObject {
 		panel.allowedContentTypes = [.json]
 		guard panel.runModal() == .OK, let url = panel.url else { return }
 		do {
-			try MappingIO.encode(selected).write(to: url, options: .atomic)
+			try orchestrator.exportData(selected).write(to: url, options: .atomic)
 			transferStatus = "Exported \(selected.count) mapping(s)."
 		} catch {
 			transferStatus = "Export failed: \(error.localizedDescription)"
@@ -215,7 +202,7 @@ final class AppState: ObservableObject {
 		panel.allowsMultipleSelection = false
 		guard panel.runModal() == .OK, let url = panel.url else { return }
 		do {
-			let imported = try MappingIO.decode(Data(contentsOf: url))
+			let imported = try orchestrator.decodeImportFile(Data(contentsOf: url))
 			guard !imported.isEmpty else {
 				transferStatus = "No mappings found in that file."
 				return
@@ -228,9 +215,8 @@ final class AppState: ObservableObject {
 
 	func completeImport(accepted: [Mapping]) {
 		pendingImport = nil
-		let result = MappingIO.apply(existing: config.mappings, accepted: accepted)
-		config.mappings = result.mappings
-		save()
+		let result = orchestrator.completeImport(accepted: accepted)
+		refreshPACIfRunning()
 		var parts: [String] = []
 		if result.added > 0 { parts.append("\(result.added) added") }
 		if result.replaced > 0 { parts.append("\(result.replaced) overwritten") }
@@ -239,13 +225,7 @@ final class AppState: ObservableObject {
 	}
 
 	func deleteMapping(_ id: Mapping.ID) {
-		config.mappings.removeAll { $0.id == id }
-		save()
-	}
-
-	func save() {
-		mappingsBox.set(config.mappings)
-		try? store.save(config)
+		orchestrator.deleteMapping(id)
 		refreshPACIfRunning()
 	}
 
@@ -253,25 +233,24 @@ final class AppState: ObservableObject {
 	// macOS caches the PAC by URL — so bump ?v= and re-apply. A networksetup
 	// hiccup must not roll back the saved mapping; surface it instead.
 	private func refreshPACIfRunning() {
-		guard isRunning, let service = activeService, let port = runningPort else { return }
-		pacVersion += 1
+		guard isRunning, let service = activeService, let pacURL = orchestrator.pacURL() else { return }
 		do {
-			try proxyManager.refreshAutoProxyURL(pacURL(port: port), service: service)
-			statusMessage = "Running on 127.0.0.1:\(port) (PAC)"
+			try proxyManager.refreshAutoProxyURL(pacURL, service: service)
+			statusMessage = "Running on 127.0.0.1:\(orchestrator.runningPort!) (PAC)"
 		} catch {
 			statusMessage = "Mapping saved, but the system PAC may be stale — toggle the proxy off and on."
 		}
 	}
 
-	var rootCertificatePEM: String { ca?.rootCertificatePEM ?? "Certificate authority unavailable" }
+	var rootCertificatePEM: String { orchestrator.rootCertificatePEM }
 
 	func trustCA() {
-		guard let ca else {
+		guard let rootCertificateURL = orchestrator.rootCertificateURL else {
 			trustStatus = "Certificate authority unavailable."
 			return
 		}
 		do {
-			try CATrustManager().trust(certificateURL: ca.rootCertificateURL)
+			try CATrustManager().trust(certificateURL: rootCertificateURL)
 			trustStatus = "Restart your browser to pick up the change."
 		} catch {
 			trustStatus = "Failed to trust certificate: \(error.localizedDescription)"
@@ -280,11 +259,11 @@ final class AppState: ObservableObject {
 	}
 
 	private func refreshCATrust() {
-		guard let ca else {
+		guard let rootCertificateURL = orchestrator.rootCertificateURL else {
 			caTrusted = false
 			return
 		}
-		caTrusted = CATrustManager().isTrusted(certificateURL: ca.rootCertificateURL)
+		caTrusted = CATrustManager().isTrusted(certificateURL: rootCertificateURL)
 	}
 
 	func checkForUpdates() {

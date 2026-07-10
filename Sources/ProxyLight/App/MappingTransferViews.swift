@@ -1,4 +1,5 @@
 import SwiftUI
+import ProxyLightCore
 
 // Sheets for choosing which mappings take part in an export or import.
 // Both follow the MappingEditorView layout: headline title, grouped Form,

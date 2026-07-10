@@ -1,4 +1,5 @@
 import SwiftUI
+import ProxyLightCore
 
 // Modal sheet for adding OR editing a URL mapping, styled to macOS conventions:
 // a grouped Form for the fields and a standard bottom button bar with Cancel on

@@ -1,4 +1,5 @@
 import SwiftUI
+import ProxyLightCore
 
 struct MenuContent: View {
 	@ObservedObject var state: AppState

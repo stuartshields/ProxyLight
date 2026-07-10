@@ -1,8 +1,6 @@
 import Testing
 import Foundation
-import Security
-import X509
-@testable import ProxyLight
+@testable import ProxyLightCore
 
 @Test func generatesAndPersistsRoot() throws {
 	let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -22,27 +20,6 @@ import X509
 	_ = try CertificateAuthority(directory: dir)
 	let attrs = try FileManager.default.attributesOfItem(atPath: dir.appendingPathComponent("ca.key").path)
 	#expect((attrs[.posixPermissions] as? NSNumber)?.intValue == 0o600)
-}
-
-@Test func rootPEMDecodesToDERThatSecurityAccepts() throws {
-	let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-	defer { try? FileManager.default.removeItem(at: dir) }
-	let ca = try CertificateAuthority(directory: dir)
-	let der = try #require(CATrustManager.derBytes(fromPEM: ca.rootCertificatePEM))
-	#expect(SecCertificateCreateWithData(nil, der as CFData) != nil)
-}
-
-@Test func derBytesRejectsNonPEMInput() {
-	#expect(CATrustManager.derBytes(fromPEM: "not a pem") == nil)
-}
-
-@Test func freshlyGeneratedRootIsNotTrusted() throws {
-	// A brand-new CA can't have trust settings in the user's keychain yet, so
-	// the read-only trust query must report false (and must not throw or hang).
-	let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-	defer { try? FileManager.default.removeItem(at: dir) }
-	let ca = try CertificateAuthority(directory: dir)
-	#expect(CATrustManager().isTrusted(certificateURL: ca.rootCertificateURL) == false)
 }
 
 @Test func mintsLeafServerContextForHost() throws {

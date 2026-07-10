@@ -4,19 +4,19 @@ import Foundation
 // - rewrite: always forward to the remote target (the original behavior).
 // - fallbackOnNotFound: serve the LOCAL origin first; only forward to the remote
 //   target if the local response is 404 (for safe GET/HEAD requests).
-enum MappingMode: String, Codable, CaseIterable {
+public enum MappingMode: String, Codable, CaseIterable, Sendable {
 	case rewrite
 	case fallbackOnNotFound
 }
 
-struct Mapping: Codable, Identifiable, Equatable {
-	var id: UUID
-	var from: String
-	var to: String
-	var enabled: Bool
-	var mode: MappingMode
+public struct Mapping: Codable, Identifiable, Equatable, Sendable {
+	public var id: UUID
+	public var from: String
+	public var to: String
+	public var enabled: Bool
+	public var mode: MappingMode
 
-	init(id: UUID = UUID(), from: String, to: String, enabled: Bool = true, mode: MappingMode = .rewrite) {
+	public init(id: UUID = UUID(), from: String, to: String, enabled: Bool = true, mode: MappingMode = .rewrite) {
 		self.id = id
 		self.from = from
 		self.to = to
@@ -26,7 +26,7 @@ struct Mapping: Codable, Identifiable, Equatable {
 
 	// Custom decode so configs written before `mode` existed still load: a
 	// missing `mode` key defaults to .rewrite (the prior behavior).
-	init(from decoder: Decoder) throws {
+	public init(from decoder: Decoder) throws {
 		let c = try decoder.container(keyedBy: CodingKeys.self)
 		id = try c.decode(UUID.self, forKey: .id)
 		from = try c.decode(String.self, forKey: .from)
@@ -36,23 +36,23 @@ struct Mapping: Codable, Identifiable, Equatable {
 	}
 }
 
-struct AppConfig: Codable, Equatable {
-	var listenPort: Int
-	var mappings: [Mapping]
+public struct AppConfig: Codable, Equatable, Sendable {
+	public var listenPort: Int
+	public var mappings: [Mapping]
 
-	static var defaultConfig: AppConfig {
+	public static var defaultConfig: AppConfig {
 		AppConfig(listenPort: 9876, mappings: [])
 	}
 }
 
-enum MappingValidationError: Equatable {
+public enum MappingValidationError: Equatable {
 	case fromInvalid(String)
 	case toInvalid(String)
 	case wildcardMismatch
 
 	// User-facing message shared by every place that surfaces a validation
 	// failure (the mappings list and the add-mapping modal).
-	var message: String {
+	public var message: String {
 		switch self {
 		case .fromInvalid(let reason): return "From: \(reason)"
 		case .toInvalid(let reason): return "To: \(reason)"
@@ -64,7 +64,7 @@ enum MappingValidationError: Equatable {
 // Pure validator mirroring MappingEngine's parsing rules, so bad patterns can
 // be flagged in the UI instead of being silently dropped at engine-build time.
 // Returns nil when the pair is valid, else the first problem found.
-func validateMapping(from: String, to: String) -> MappingValidationError? {
+public func validateMapping(from: String, to: String) -> MappingValidationError? {
 	if let reason = urlValidationProblem(from) {
 		return .fromInvalid(reason)
 	}

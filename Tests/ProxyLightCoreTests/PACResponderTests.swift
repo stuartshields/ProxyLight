@@ -3,7 +3,7 @@ import Foundation
 import NIOCore
 import NIOPosix
 import NIOHTTP1
-@testable import ProxyLight
+@testable import ProxyLightCore
 
 // Pure dispatch-rule tests (fast; not in the serialized suite).
 @Test func originFormURIIsSelfAddressed() {
