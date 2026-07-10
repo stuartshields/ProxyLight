@@ -25,6 +25,16 @@ final class AppState: ObservableObject {
 	@Published var launchAtLoginStatus: String = ""
 	// A decoded import file awaiting the user's selection in the import sheet.
 	@Published var pendingImport: PendingImport?
+	// Set when a manual check finds a newer GitHub release; drives the
+	// "Download x.x.x" buttons in Settings and the menu.
+	@Published var availableUpdate: AvailableUpdate?
+	@Published var updateStatus = ""
+	@Published var isCheckingForUpdates = false
+	@Published var isInstallingUpdate = false
+
+	// Version the packaged app reports. `swift run` has no Info.plist, so dev
+	// builds fall back to a version every release beats.
+	static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0-dev"
 
 	private let store: MappingStore
 	private let restoreStore: ProxyRestoreStore
@@ -38,6 +48,12 @@ final class AppState: ObservableObject {
 	// event-loop threads. Kept in sync with config.mappings on every save().
 	private let mappingsBox = MappingsBox([])
 	private let loginItemManager = LoginItemManager()
+	private var updateCheckTimer: Timer?
+
+	// Quiet checks keep the update discoverable without the user opening
+	// Settings: at launch (delayed so a login-time start has network), then daily.
+	private static let launchUpdateCheckDelay: Duration = .seconds(10)
+	private static let backgroundUpdateCheckInterval: TimeInterval = 24 * 60 * 60
 
 	init() {
 		let dir = MappingStore.defaultDirectory
@@ -53,6 +69,7 @@ final class AppState: ObservableObject {
 		installTerminationHandlers()
 		refreshLaunchAtLogin()
 		refreshCATrust()
+		scheduleBackgroundUpdateChecks()
 		// Honor "start at login": if we're a registered login item, come up
 		// running so traffic is routed without the user clicking anything.
 		if case .enabled = loginItemManager.state {
@@ -242,6 +259,68 @@ final class AppState: ObservableObject {
 			return
 		}
 		caTrusted = CATrustManager().isTrusted(certificateURL: ca.rootCertificateURL)
+	}
+
+	func checkForUpdates() {
+		checkForUpdates(quietly: false)
+	}
+
+	// A quiet check updates availableUpdate (so the menu's update button
+	// appears) but never writes status text the user didn't ask for.
+	private func checkForUpdates(quietly: Bool) {
+		guard !isCheckingForUpdates else { return }
+		isCheckingForUpdates = true
+		if !quietly { updateStatus = "" }
+		Task {
+			do {
+				availableUpdate = try await UpdateChecker().checkForUpdate(currentVersion: Self.appVersion)
+				if !quietly { updateStatus = availableUpdate == nil ? "ProxyLight is up to date." : "" }
+			} catch {
+				if !quietly { updateStatus = "Update check failed: \(error.localizedDescription)" }
+			}
+			isCheckingForUpdates = false
+		}
+	}
+
+	private func scheduleBackgroundUpdateChecks() {
+		Task { [weak self] in
+			try? await Task.sleep(for: Self.launchUpdateCheckDelay)
+			self?.checkForUpdates(quietly: true)
+		}
+		updateCheckTimer = Timer.scheduledTimer(withTimeInterval: Self.backgroundUpdateCheckInterval, repeats: true) { [weak self] _ in
+			MainActor.assumeIsolated { self?.checkForUpdates(quietly: true) }
+		}
+	}
+
+	func installUpdate() {
+		guard let update = availableUpdate, !isInstallingUpdate else { return }
+		isInstallingUpdate = true
+		Task {
+			do {
+				let installed = try await SelfUpdater().installUpdate(from: update.downloadURL) { [weak self] phase in
+					self?.updateStatus = Self.statusText(for: phase, version: update.version)
+				}
+				updateStatus = "Relaunching…"
+				try SelfUpdater.spawnRelauncher(appPath: installed.path)
+				NSApplication.shared.terminate(nil)
+			} catch SelfUpdateError.notInstalledAsApp, SelfUpdateError.unsignedHostApp {
+				// Dev and unsigned builds can't verify an update, so hand the
+				// zip to the browser instead of installing unverified code.
+				NSWorkspace.shared.open(update.downloadURL)
+				updateStatus = "This build can't self-update — opened the download in your browser."
+			} catch {
+				updateStatus = "Update failed: \(error.localizedDescription)"
+			}
+			isInstallingUpdate = false
+		}
+	}
+
+	private static func statusText(for phase: UpdatePhase, version: String) -> String {
+		switch phase {
+		case .downloading: "Downloading \(version)…"
+		case .verifying: "Verifying download…"
+		case .installing: "Installing…"
+		}
 	}
 
 	func setLaunchAtLogin(_ enabled: Bool) {

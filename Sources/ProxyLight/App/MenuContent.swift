@@ -24,6 +24,10 @@ struct MenuContent: View {
 			// so windows would otherwise open/stay behind other apps.
 			NSApp.activate(ignoringOtherApps: true)
 		}
+		if let update = state.availableUpdate {
+			Button("Update to \(update.version)…") { state.installUpdate() }
+				.disabled(state.isInstallingUpdate)
+		}
 		Button("Settings…") {
 			openSettings()
 			NSApp.activate(ignoringOtherApps: true)

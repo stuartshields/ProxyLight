@@ -9,6 +9,24 @@ struct SettingsView: View {
 	var body: some View {
 		Form {
 			Section {
+				LabeledContent("Version", value: AppState.appVersion)
+				if let update = state.availableUpdate {
+					Button(state.isInstallingUpdate ? "Updating…" : "Update to \(update.version)…") { state.installUpdate() }
+						.disabled(state.isInstallingUpdate)
+				} else {
+					Button(state.isCheckingForUpdates ? "Checking…" : "Check for Updates…") { state.checkForUpdates() }
+						.disabled(state.isCheckingForUpdates)
+				}
+				if !state.updateStatus.isEmpty {
+					Text(state.updateStatus)
+						.font(.callout)
+						.foregroundStyle(.secondary)
+				}
+			} header: {
+				Text("Updates")
+			}
+
+			Section {
 				Toggle("Start ProxyLight at login", isOn: Binding(
 					get: { state.launchAtLogin },
 					set: { state.setLaunchAtLogin($0) }
@@ -61,6 +79,6 @@ struct SettingsView: View {
 			}
 		}
 		.formStyle(.grouped)
-		.frame(width: 580, height: 440)
+		.frame(width: 580, height: 520)
 	}
 }
