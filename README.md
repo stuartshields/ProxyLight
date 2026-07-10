@@ -1,15 +1,16 @@
 # ProxyLight
 
-Point a URL at a different origin without touching DNS, hosts files, or your app's config. ProxyLight is a macOS menu bar app that runs a local proxy and rewrites URLs you map to a remote target — including HTTPS, transparently.
+Point a URL at a different origin without touching DNS, hosts files, or your app's config. ProxyLight runs a local proxy and rewrites URLs you map to a remote target — including HTTPS, transparently. It ships as a macOS menu bar app, and as a Linux CLI from the same codebase.
 
 Example: serve `https://myapp.example.com/assets/*` from `https://origin.example.net/assets/*` while your browser still shows the original address.
 
 ## Requirements
 
-- macOS 14 or later, on an Apple Silicon Mac.
-- To build from source: Swift 6 toolchain (Xcode 16+ or the Swift toolchain).
+- **macOS app**: macOS 14 or later, on an Apple Silicon Mac.
+- **Linux CLI**: any Linux distribution with a Swift 6 toolchain; no packaged binary yet, build from source (see [Linux CLI](#linux-cli)).
+- To build from source: Swift 6 toolchain (Xcode 16+ on macOS, or the Swift toolchain on Linux).
 
-## Install
+## Install (macOS app)
 
 1. Download `ProxyLight.zip` from the [latest release](https://github.com/stuartshields/ProxyLight/releases/latest).
 2. Unzip it and drag `ProxyLight.app` to `/Applications`.
@@ -46,15 +47,34 @@ Toggle individual mappings on and off from the menu. Use **Import…** / **Expor
 
 - The proxy listens on `127.0.0.1` only — it is never exposed to the network.
 - HTTP/1.1 only. WebSockets on mapped hosts are not supported.
-- The default listen port is `9876` (change it in Settings → Proxy).
-- The CA private key lives in `~/Library/Application Support/ProxyLight/`.
+- The default listen port is `9876` (change it in Settings → Proxy, or with `proxylight start --port` on Linux).
+- The CA private key lives in `~/Library/Application Support/ProxyLight/` (macOS) or `$XDG_CONFIG_HOME/proxylight`/`~/.config/proxylight` (Linux).
 - If ProxyLight quits or crashes, normal browsing is unaffected — macOS falls back to `DIRECT` once the PAC URL stops responding. Only mapped hosts stop resolving until the app restarts or you turn the proxy off to restore your previous settings.
+
+## Linux CLI
+
+There's no packaged binary yet — build `proxylight-cli` from source with a Swift 6 toolchain:
+
+```
+swift build --product proxylight-cli
+```
+
+Unlike the macOS app, the CLI doesn't touch system proxy settings or the OS certificate trust store — Linux has no single equivalent to `networksetup`/Keychain, so those steps are manual:
+
+1. **Add a mapping**: `swift run proxylight-cli mapping add "https://myapp.example.com/assets/*" "https://origin.example.net/assets/*"`
+2. **Start the proxy**: `swift run proxylight-cli start`. This prints the PAC URL (`http://127.0.0.1:<port>/proxy.pac`) and the path to the generated CA certificate.
+3. **Point your browser at the PAC URL** (its network/proxy settings — same idea as step 4 of First steps above, just configured manually instead of by the app) and **import the CA certificate** printed above into your browser's trust store, so it accepts the rewritten HTTPS responses.
+4. Stop the proxy with Ctrl-C — it shuts down cleanly.
+
+Other subcommands: `mapping list`, `mapping remove <id>`, `import <file>`, `export <file>`, `ca-path`. Run `proxylight-cli --help` for the full reference.
 
 ## Development
 
-- Build: `swift build`
-- Test: `swift test`
-- Run from source: `swift run ProxyLight`
+- Build (macOS app): `swift build`
+- Build (Linux CLI): `swift build --product proxylight-cli`
+- Test: `swift test` (macOS; builds and tests the app target too)
+- Run macOS app from source: `swift run ProxyLight`
+- Run CLI from source: `swift run proxylight-cli start`
 - Package the app bundle: `scripts/build-app.sh` → `dist/ProxyLight.app`
 
 See `CLAUDE.md` for architecture and packaging details.

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import ProxyLight
+@testable import ProxyLightCore
 
 private let zipURLString = "https://github.com/stuartshields/ProxyLight/releases/download/v0.1.3/ProxyLight.zip"
 

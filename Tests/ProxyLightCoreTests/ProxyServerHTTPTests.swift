@@ -3,7 +3,7 @@ import Foundation
 import NIOCore
 import NIOPosix
 import NIOHTTP1
-@testable import ProxyLight
+@testable import ProxyLightCore
 
 // Minimal origin server that echoes the request line + Host header it received.
 private func startEchoOrigin(group: EventLoopGroup) throws -> (channel: Channel, port: Int) {

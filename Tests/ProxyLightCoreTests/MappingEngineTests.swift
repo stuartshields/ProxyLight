@@ -1,5 +1,5 @@
 import Testing
-@testable import ProxyLight
+@testable import ProxyLightCore
 
 private func engine(_ ms: [(String, String, Bool)]) -> MappingEngine {
 	MappingEngine(mappings: ms.map { Mapping(from: $0.0, to: $0.1, enabled: $0.2) })

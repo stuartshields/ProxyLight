@@ -1,10 +1,13 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
-enum UpdateError: LocalizedError {
+public enum UpdateError: LocalizedError {
 	case badStatus(Int)
 	case responseTooLarge
 
-	var errorDescription: String? {
+	public var errorDescription: String? {
 		switch self {
 		case .badStatus(let code): "GitHub returned HTTP \(code)."
 		case .responseTooLarge: "Release info was unexpectedly large."
@@ -14,7 +17,7 @@ enum UpdateError: LocalizedError {
 
 // Thin network wrapper (same pattern as SystemProxyManager/CATrustManager):
 // fetches the latest GitHub release and defers to UpdateCheck for the logic.
-struct UpdateChecker {
+public struct UpdateChecker {
 	private static let latestReleaseURL = URL(string: "https://api.github.com/repos/stuartshields/ProxyLight/releases/latest")!
 	private static let maxResponseBytes = 1 << 20
 
@@ -27,7 +30,9 @@ struct UpdateChecker {
 		return URLSession(configuration: config)
 	}()
 
-	func checkForUpdate(currentVersion: String) async throws -> AvailableUpdate? {
+	public init() {}
+
+	public func checkForUpdate(currentVersion: String) async throws -> AvailableUpdate? {
 		var request = URLRequest(url: Self.latestReleaseURL)
 		request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
 		let (data, response) = try await Self.session.data(for: request)
@@ -39,9 +44,9 @@ struct UpdateChecker {
 	}
 }
 
-struct AvailableUpdate: Equatable {
-	var version: String
-	var downloadURL: URL
+public struct AvailableUpdate: Equatable, Sendable {
+	public var version: String
+	public var downloadURL: URL
 }
 
 // Pure release-check logic (no I/O) so it stays unit-testable; the network
