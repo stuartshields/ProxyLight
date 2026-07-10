@@ -39,6 +39,11 @@ struct SettingsView: View {
 				Text("Trust the ProxyLight certificate so your browser accepts intercepted HTTPS mappings (your user account).")
 					.font(.callout)
 					.foregroundStyle(.secondary)
+				Label(state.caTrusted
+					? "Certificate is trusted for your user account."
+					: "Certificate isn't trusted yet.",
+					systemImage: state.caTrusted ? "checkmark.seal.fill" : "xmark.seal")
+					.foregroundStyle(state.caTrusted ? Color.green : Color.secondary)
 				Button("Trust Certificate…") { state.trustCA() }
 				if !state.trustStatus.isEmpty {
 					Text(state.trustStatus)

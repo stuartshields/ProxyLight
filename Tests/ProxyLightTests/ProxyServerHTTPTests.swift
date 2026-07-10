@@ -10,8 +10,9 @@ private func startEchoOrigin(group: EventLoopGroup) throws -> (channel: Channel,
 	let bootstrap = ServerBootstrap(group: group)
 		.serverChannelOption(ChannelOptions.backlog, value: 16)
 		.childChannelInitializer { channel in
-			channel.pipeline.configureHTTPServerPipeline().flatMap {
-				channel.pipeline.addHandler(EchoOriginHandler())
+			channel.eventLoop.makeCompletedFuture {
+				try channel.pipeline.syncOperations.configureHTTPServerPipeline()
+				try channel.pipeline.syncOperations.addHandler(EchoOriginHandler())
 			}
 		}
 	let channel = try bootstrap.bind(host: "127.0.0.1", port: 0).wait()
@@ -45,8 +46,9 @@ private func startBodyEchoOrigin(group: EventLoopGroup) throws -> (channel: Chan
 	let bootstrap = ServerBootstrap(group: group)
 		.serverChannelOption(ChannelOptions.backlog, value: 16)
 		.childChannelInitializer { channel in
-			channel.pipeline.configureHTTPServerPipeline().flatMap {
-				channel.pipeline.addHandler(BodyEchoOriginHandler())
+			channel.eventLoop.makeCompletedFuture {
+				try channel.pipeline.syncOperations.configureHTTPServerPipeline()
+				try channel.pipeline.syncOperations.addHandler(BodyEchoOriginHandler())
 			}
 		}
 	let channel = try bootstrap.bind(host: "127.0.0.1", port: 0).wait()
@@ -219,7 +221,11 @@ private func sendRawRequest(proxyPort: Int, raw: String, group: EventLoopGroup, 
 	}
 	let promise = group.next().makePromise(of: String.self)
 	let channel = try ClientBootstrap(group: group)
-		.channelInitializer { $0.pipeline.addHandler(Collector(promise)) }
+		.channelInitializer { channel in
+			channel.eventLoop.makeCompletedFuture {
+				try channel.pipeline.syncOperations.addHandler(Collector(promise))
+			}
+		}
 		.connect(host: "127.0.0.1", port: proxyPort).wait()
 	let timeoutTask = channel.eventLoop.scheduleTask(in: timeout) {
 		promise.fail(TestTimeoutError())
@@ -333,7 +339,9 @@ private func sendTwoRequestsOnKeepAliveConnection(proxyPort: Int, host: String, 
 
 	let channel = try ClientBootstrap(group: group)
 		.channelInitializer { channel in
-			channel.pipeline.addHandler(KeepAliveTwoResponseCollector(secondRequestRaw: secondRequestRaw, response1Promise: response1Promise, response2Promise: response2Promise))
+			channel.eventLoop.makeCompletedFuture {
+				try channel.pipeline.syncOperations.addHandler(KeepAliveTwoResponseCollector(secondRequestRaw: secondRequestRaw, response1Promise: response1Promise, response2Promise: response2Promise))
+			}
 		}
 		.connect(host: "127.0.0.1", port: proxyPort).wait()
 	defer { try? channel.close().wait() }
@@ -389,8 +397,9 @@ private func startStatusOrigin(status: HTTPResponseStatus, body: String, content
 	let channel = try ServerBootstrap(group: group)
 		.serverChannelOption(ChannelOptions.backlog, value: 16)
 		.childChannelInitializer { channel in
-			channel.pipeline.configureHTTPServerPipeline().flatMap {
-				channel.pipeline.addHandler(StatusOriginHandler(status: status, body: body, contentType: contentType))
+			channel.eventLoop.makeCompletedFuture {
+				try channel.pipeline.syncOperations.configureHTTPServerPipeline()
+				try channel.pipeline.syncOperations.addHandler(StatusOriginHandler(status: status, body: body, contentType: contentType))
 			}
 		}
 		.bind(host: "127.0.0.1", port: 0).wait()

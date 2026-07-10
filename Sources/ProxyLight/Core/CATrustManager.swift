@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 enum CATrustError: Error, LocalizedError {
 	case commandFailed(String)
@@ -37,6 +38,29 @@ struct CATrustManager {
 		} catch {
 			throw CATrustError.commandFailed(error.localizedDescription)
 		}
+	}
+
+	// Reports whether the CA root currently has user-domain trust settings —
+	// the state trust(certificateURL:) establishes. Queries the keychain
+	// read-only, so it's safe to call at every launch; it stays truthful if the
+	// user revokes trust in Keychain Access or the CA is regenerated.
+	func isTrusted(certificateURL: URL) -> Bool {
+		guard let pem = try? String(contentsOf: certificateURL, encoding: .utf8),
+			let der = Self.derBytes(fromPEM: pem),
+			let certificate = SecCertificateCreateWithData(nil, der as CFData)
+		else { return false }
+		var settings: CFArray?
+		return SecTrustSettingsCopyTrustSettings(certificate, .user, &settings) == errSecSuccess
+	}
+
+	// Strips the PEM armor and decodes the base64 body. Pure so the
+	// PEM-to-SecCertificate path is unit-testable without a keychain.
+	static func derBytes(fromPEM pem: String) -> Data? {
+		let body = pem
+			.split(whereSeparator: \.isNewline)
+			.filter { !$0.hasPrefix("-----") }
+			.joined()
+		return Data(base64Encoded: body)
 	}
 
 	static var loginKeychainPath: String {
