@@ -16,6 +16,24 @@ func configDirectory() -> URL {
 	ProxyOrchestrator.defaultDirectory
 }
 
+// Self-pipe instead of DispatchSource.makeSignalSource: on Linux, libdispatch
+// signal sources read a signalfd, which never sees a signal set to SIG_IGN, so
+// Ctrl-C and `kill` were silently ignored there. A C handler that writes one
+// byte to a pipe works the same on both platforms.
+nonisolated(unsafe) private var shutdownPipe: [Int32] = [-1, -1]
+
+func waitForShutdownSignal() {
+	pipe(&shutdownPipe)
+	for sig in [SIGINT, SIGTERM] {
+		signal(sig) { _ in
+			var byte: UInt8 = 0
+			_ = write(shutdownPipe[1], &byte, 1)
+		}
+	}
+	var byte: UInt8 = 0
+	_ = read(shutdownPipe[0], &byte, 1)
+}
+
 struct Start: ParsableCommand {
 	static let configuration = CommandConfiguration(abstract: "Start the proxy and block until interrupted (Ctrl-C).")
 
@@ -36,20 +54,8 @@ struct Start: ParsableCommand {
 			print("Warning: certificate authority unavailable — HTTPS mappings will pass through untouched.")
 		}
 
-		// The main thread blocks on the semaphore below rather than running a
-		// run loop, so these must fire on a queue GCD services independently —
-		// `.main` would never drain and Ctrl-C/kill would hang forever.
-		let signalQueue = DispatchQueue(label: "proxylight.signals")
-		let semaphore = DispatchSemaphore(value: 0)
-		var sources: [DispatchSourceSignal] = []
-		for sig in [SIGINT, SIGTERM] {
-			signal(sig, SIG_IGN)
-			let source = DispatchSource.makeSignalSource(signal: sig, queue: signalQueue)
-			source.setEventHandler { semaphore.signal() }
-			source.resume()
-			sources.append(source)
-		}
-		semaphore.wait()
+		fflush(nil)
+		waitForShutdownSignal()
 		try? orchestrator.stop()
 		print("Stopped.")
 	}
