@@ -7,8 +7,8 @@ Example: serve `https://myapp.example.com/assets/*` from `https://origin.example
 ## Requirements
 
 - **macOS app**: macOS 14 or later, on an Apple Silicon Mac.
-- **Linux CLI**: any Linux distribution with a Swift 6 toolchain; no packaged binary yet, build from source (see [Linux CLI](#linux-cli)).
-- To build from source: Swift 6 toolchain (Xcode 16+ on macOS, or the Swift toolchain on Linux).
+- **Linux CLI**: any Linux distribution; no packaged binary yet, build from source (see [Linux CLI](#linux-cli)).
+- To build from source: Swift 6.1 or later (Xcode 16.3+ on macOS, or the Swift toolchain or a `swift:6.1` Docker image on Linux). The pinned dependencies need Swift tools 6.1.
 
 ## Install (macOS app)
 
@@ -53,10 +53,17 @@ Toggle individual mappings on and off from the menu. Use **Import…** / **Expor
 
 ## Linux CLI
 
-There's no packaged binary yet — build `proxylight-cli` from source with a Swift 6 toolchain:
+There's no packaged binary yet — build `proxylight-cli` from source with a Swift 6.1 toolchain:
 
 ```
-swift build --product proxylight-cli
+swift build --product proxylight-cli -c release --static-swift-stdlib
+```
+
+`--static-swift-stdlib` bakes the Swift runtime into the binary so it runs on a machine without Swift installed. No toolchain? Build in Docker; the binary lands in `.build/release/proxylight-cli` on the host:
+
+```
+docker run --rm -v "$PWD":/src -w /src swift:6.1-noble \
+  swift build --product proxylight-cli -c release --static-swift-stdlib
 ```
 
 Unlike the macOS app, the CLI doesn't touch system proxy settings or the OS certificate trust store — Linux has no single equivalent to `networksetup`/Keychain, so those steps are manual:
@@ -64,14 +71,14 @@ Unlike the macOS app, the CLI doesn't touch system proxy settings or the OS cert
 1. **Add a mapping**: `swift run proxylight-cli mapping add "https://myapp.example.com/assets/*" "https://origin.example.net/assets/*"`
 2. **Start the proxy**: `swift run proxylight-cli start`. This prints the PAC URL (`http://127.0.0.1:<port>/proxy.pac`) and the path to the generated CA certificate.
 3. **Point your browser at the PAC URL** (its network/proxy settings — same idea as step 4 of First steps above, just configured manually instead of by the app) and **import the CA certificate** printed above into your browser's trust store, so it accepts the rewritten HTTPS responses.
-4. Stop the proxy with Ctrl-C — it shuts down cleanly.
+4. Stop the proxy with Ctrl-C or `kill` (SIGINT or SIGTERM) — it shuts down cleanly, so it's safe to run under systemd or as a background job.
 
 Other subcommands: `mapping list`, `mapping remove <id>`, `import <file>`, `export <file>`, `ca-path`. Run `proxylight-cli --help` for the full reference.
 
 ## Development
 
 - Build (macOS app): `swift build`
-- Build (Linux CLI): `swift build --product proxylight-cli`
+- Build (Linux CLI): `swift build --product proxylight-cli` (add `-c release --static-swift-stdlib` for a portable binary)
 - Test: `swift test` (macOS; builds and tests the app target too)
 - Run macOS app from source: `swift run ProxyLight`
 - Run CLI from source: `swift run proxylight-cli start`
