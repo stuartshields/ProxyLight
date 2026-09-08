@@ -8,10 +8,10 @@ struct MappingBundle: Codable, Equatable {
 
 // Import/export of mappings so a config can be shared between people.
 // Pure and I/O-free — the UI layer handles file panels and disk access.
-enum MappingIO {
-	static let currentVersion = 1
+public enum MappingIO {
+	public static let currentVersion = 1
 
-	static func encode(_ mappings: [Mapping]) throws -> Data {
+	public static func encode(_ mappings: [Mapping]) throws -> Data {
 		let encoder = JSONEncoder()
 		encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
 		return try encoder.encode(MappingBundle(version: currentVersion, mappings: mappings))
@@ -19,7 +19,7 @@ enum MappingIO {
 
 	// Accepts either the versioned bundle or a bare array of mappings, so a
 	// hand-written or older file still imports.
-	static func decode(_ data: Data) throws -> [Mapping] {
+	public static func decode(_ data: Data) throws -> [Mapping] {
 		let decoder = JSONDecoder()
 		if let bundle = try? decoder.decode(MappingBundle.self, from: data) {
 			return bundle.mappings
@@ -31,21 +31,21 @@ enum MappingIO {
 	// - duplicate: identical from/to/mode already present — importing is a no-op.
 	// - conflict: shares a from (local) or to (live site) URL with existing
 	//   mappings, so importing it means overwriting those.
-	enum ImportDisposition: Equatable {
+	public enum ImportDisposition: Equatable {
 		case new
 		case duplicate
 		case conflict([Mapping])
 	}
 
 	// Outcome of a selective import.
-	struct ImportResult: Equatable {
-		var mappings: [Mapping]
-		var added: Int
-		var replaced: Int
-		var unchanged: Int
+	public struct ImportResult: Equatable {
+		public var mappings: [Mapping]
+		public var added: Int
+		public var replaced: Int
+		public var unchanged: Int
 	}
 
-	static func classify(_ imported: Mapping, against existing: [Mapping]) -> ImportDisposition {
+	public static func classify(_ imported: Mapping, against existing: [Mapping]) -> ImportDisposition {
 		if existing.contains(where: { isSameContent($0, imported) }) {
 			return .duplicate
 		}
@@ -57,7 +57,7 @@ enum MappingIO {
 	// duplicates are skipped; a conflicting import overwrites every existing
 	// mapping it collides with (the first keeps its slot and id, extras are
 	// removed); the rest are appended with fresh ids so ids never collide.
-	static func apply(existing: [Mapping], accepted: [Mapping]) -> ImportResult {
+	public static func apply(existing: [Mapping], accepted: [Mapping]) -> ImportResult {
 		var result = ImportResult(mappings: existing, added: 0, replaced: 0, unchanged: 0)
 		for imported in accepted {
 			if result.mappings.contains(where: { isSameContent($0, imported) }) {

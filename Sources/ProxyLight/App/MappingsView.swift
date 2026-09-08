@@ -1,4 +1,5 @@
 import SwiftUI
+import ProxyLightCore
 
 // Standalone "Edit Mappings" window: the mappings list plus add/import/export.
 // Everything else (startup, proxy port, certificate authority) lives in SettingsView.
